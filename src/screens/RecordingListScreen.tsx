@@ -22,45 +22,43 @@ export default function RecordingListScreen({ navigation }: Props) {
   const [liveTranscript, setLiveTranscript] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Ref-based interlock — flipped synchronously before any await, so commands
+  // from in-flight Groq calls that arrive after stop are ignored.
+  const isActiveRecordingRef = useRef(false);
+  const isSavingRef = useRef(false);
+
   // Keeps segment URIs collected during a recording session
   const sessionSegmentsRef = useRef<string[]>([]);
 
   // ── Transcript + command detection ─────────────────────────────────────────
-  // Use a ref so the stable callback always dispatches to the latest functions.
   type TranscriptCmd = import('../hooks/useRecordingTranscript').TranscriptCommand;
-  const transcriptCmdRef = useRef<(cmd: TranscriptCmd) => Promise<void>>(async () => {});
 
-  // Stable callback — safe to pass as a dep to useRecordingTranscript.
+  // Stable callback — safe to pass to useRecordingTranscript without triggering
+  // re-subscriptions. Dispatches via ref so it always sees the latest handlers.
+  const transcriptCmdRef = useRef<(cmd: TranscriptCmd) => void>(() => {});
   const handleTranscriptCommand = useCallback(
-    (cmd: TranscriptCmd) => transcriptCmdRef.current(cmd),
+    (cmd: TranscriptCmd) => {
+      // Ignore commands that arrive after recording has already been stopped
+      if (!isActiveRecordingRef.current) return;
+      transcriptCmdRef.current(cmd);
+    },
     [],
   );
 
-  const { processSegment, waitForPending, reset: resetTranscript, getTranscript } =
+  const { processSegment, waitForPending, reset: resetTranscript, enable: enableTranscript, getTranscript } =
     useRecordingTranscript(handleTranscriptCommand);
 
-  // ── Idle voice command (start recording) ───────────────────────────────────
-  useVoiceCommands(
-    useCallback(() => { handleRecordPress(); }, []),
-    recorder.state === 'idle' && !saving,
-  );
-
-  // ── Segment callback (called by recorder every ~5 s) ──────────────────────
-  const handleSegment = useCallback(
-    (uri: string, _segDuration: number) => {
-      sessionSegmentsRef.current.push(uri);
-      processSegment(uri).then((full) => setLiveTranscript(full));
-    },
-    [processSegment],
-  );
-
   // ── Stop + save ────────────────────────────────────────────────────────────
+  // Uses only stable refs for the guard — no dependency on React state closures.
   const stopAndSave = useCallback(async () => {
-    if (recorder.state === 'idle' || saving) return;
+    if (!isActiveRecordingRef.current || isSavingRef.current) return;
+    // Flip interlock synchronously before first await to block any concurrent calls
+    isActiveRecordingRef.current = false;
+    isSavingRef.current = true;
     setSaving(true);
+    resetTranscript(); // immediately disable in-flight Groq callbacks
     try {
       const { segmentUris, duration } = await recorder.stop();
-      // Wait for any in-flight Groq calls (including the final segment)
       await waitForPending();
       const transcript = getTranscript();
       const now = new Date();
@@ -74,32 +72,49 @@ export default function RecordingListScreen({ navigation }: Props) {
         transcript: transcript || undefined,
       };
       await addRecording(recording);
+    } catch (e) {
+      console.warn('[RecordingList] stopAndSave error:', e);
     } finally {
-      resetTranscript();
       setLiveTranscript('');
       sessionSegmentsRef.current = [];
+      isSavingRef.current = false;
       setSaving(false);
     }
-  }, [recorder, saving, waitForPending, getTranscript, addRecording, resetTranscript]);
+  }, [recorder.stop, waitForPending, getTranscript, addRecording, resetTranscript]);
 
-  // Keep the ref in sync with the latest functions on every render,
-  // so the stable handleTranscriptCommand always dispatches to the current closures.
-  transcriptCmdRef.current = async (cmd: TranscriptCmd) => {
+  // Update the dispatch ref every render so pause/resume always use latest state.
+  transcriptCmdRef.current = (cmd: TranscriptCmd) => {
     if (cmd === 'stopRecording') {
-      await stopAndSave();
+      stopAndSave();
     } else if (cmd === 'pause') {
-      await recorder.pause();
+      recorder.pause();
     } else if (cmd === 'resume') {
-      await recorder.resume();
+      recorder.resume();
     }
   };
 
+  // ── Segment callback (called by recorder every ~5 s) ──────────────────────
+  const handleSegment = useCallback(
+    (uri: string, _segDuration: number) => {
+      processSegment(uri).then((full) => setLiveTranscript(full));
+    },
+    [processSegment],
+  );
+
+  // ── Idle voice command (start recording) ───────────────────────────────────
+  useVoiceCommands(
+    useCallback(() => { handleRecordPress(); }, []),
+    recorder.state === 'idle' && !saving,
+  );
+
   // ── Record button ──────────────────────────────────────────────────────────
   async function handleRecordPress() {
-    if (recorder.state === 'idle') {
+    if (recorder.state === 'idle' && !isSavingRef.current) {
       sessionSegmentsRef.current = [];
+      isActiveRecordingRef.current = true;
+      enableTranscript();
       await recorder.start(handleSegment);
-    } else {
+    } else if (isActiveRecordingRef.current) {
       await stopAndSave();
     }
   }

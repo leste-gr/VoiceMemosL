@@ -19,9 +19,12 @@ export function useRecordingTranscript(onCommand: OnCommand) {
   const onCommandRef = useRef(onCommand);
   onCommandRef.current = onCommand;
   const pendingRef = useRef<Promise<string>[]>([]);
+  // When reset() is called, mark as disabled so any in-flight Groq calls
+  // that settle afterwards do not append to the transcript or fire commands.
+  const activeRef = useRef(true);
 
   const processSegment = useCallback((uri: string): Promise<string> => {
-    const p = doTranscribe(uri, transcriptRef, onCommandRef);
+    const p = doTranscribe(uri, transcriptRef, onCommandRef, activeRef);
     pendingRef.current.push(p);
     return p;
   }, []);
@@ -33,19 +36,26 @@ export function useRecordingTranscript(onCommand: OnCommand) {
   }, []);
 
   const reset = useCallback(() => {
+    activeRef.current = false;   // discards any still-pending Groq responses
     transcriptRef.current = '';
     pendingRef.current = [];
   }, []);
 
+  /** Call this before starting a new recording session to re-enable the hook. */
+  const enable = useCallback(() => {
+    activeRef.current = true;
+  }, []);
+
   const getTranscript = useCallback(() => transcriptRef.current, []);
 
-  return { processSegment, waitForPending, reset, getTranscript };
+  return { processSegment, waitForPending, reset, enable, getTranscript };
 }
 
 async function doTranscribe(
   uri: string,
   transcriptRef: React.MutableRefObject<string>,
   onCommandRef: React.MutableRefObject<OnCommand>,
+  activeRef: React.MutableRefObject<boolean>,
 ): Promise<string> {
   try {
     const formData = new FormData();
@@ -69,6 +79,9 @@ async function doTranscribe(
     const json = await res.json();
     const chunk: string = (json.text ?? '').trim();
     console.log('[Transcript] chunk:', JSON.stringify(chunk));
+
+    // If recording was stopped while this request was in-flight, discard it.
+    if (!activeRef.current) return transcriptRef.current;
 
     if (chunk) {
       transcriptRef.current = transcriptRef.current
