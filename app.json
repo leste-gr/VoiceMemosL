@@ -15,10 +15,10 @@
       "bundleIdentifier": "com.yourteam.voicememos",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Voice Memos needs microphone access to record your audio memos.",
-        "NSSpeechRecognitionUsageDescription": "Voice Memos uses speech recognition so you can control the app hands-free while driving.",
         "UIBackgroundModes": [
           "audio"
-        ]
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -33,13 +33,6 @@
     },
     "plugins": [
       "expo-av",
-      [
-        "expo-speech-recognition",
-        {
-          "microphonePermission": "Voice Memos needs microphone access to record your audio memos.",
-          "speechRecognitionPermission": "Voice Memos uses speech recognition so you can control the app hands-free while driving."
-        }
-      ],
       [
         "expo-build-properties",
         {

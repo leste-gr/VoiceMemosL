@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+﻿import React, { useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -22,12 +22,17 @@ export default function PlaybackScreen({ route }: Props) {
     else play();
   }
 
+  const segmentCount = recording.segmentUris?.length ?? 1;
+
   return (
     <View style={styles.container}>
       <View style={styles.titleCard}>
         <Ionicons name="mic" size={32} color="#e53935" />
         <Text style={styles.title}>{recording.title}</Text>
         <Text style={styles.date}>{new Date(recording.createdAt).toLocaleString()}</Text>
+        {segmentCount > 1 && (
+          <Text style={styles.segmentLabel}>{segmentCount} segments</Text>
+        )}
       </View>
 
       <View style={styles.controls}>
@@ -76,6 +81,18 @@ export default function PlaybackScreen({ route }: Props) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* Transcript (if available) */}
+      {!!recording.transcript && (
+        <View style={styles.transcriptCard}>
+          <Text style={styles.transcriptHeading}>
+            <Ionicons name="text-outline" size={13} color="#888" /> Transcript
+          </Text>
+          <ScrollView style={styles.transcriptScroll} showsVerticalScrollIndicator>
+            <Text style={styles.transcriptText}>{recording.transcript}</Text>
+          </ScrollView>
+        </View>
+      )}
     </View>
   );
 }
@@ -87,7 +104,7 @@ function formatTime(s: number): string {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5', justifyContent: 'space-around', padding: 24 },
+  container: { flex: 1, backgroundColor: '#f5f5f5', padding: 24, gap: 20 },
   titleCard: {
     alignItems: 'center', gap: 10,
     backgroundColor: '#fff', borderRadius: 20, padding: 32,
@@ -96,6 +113,7 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 20, fontWeight: '700', color: '#1a1a1a', textAlign: 'center' },
   date: { fontSize: 13, color: '#999' },
+  segmentLabel: { fontSize: 11, color: '#aaa', marginTop: 2 },
   controls: { gap: 8 },
   slider: { width: '100%', height: 40 },
   times: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 4 },
@@ -109,4 +127,12 @@ const styles = StyleSheet.create({
     shadowColor: '#e53935', shadowOpacity: 0.5, shadowRadius: 10, shadowOffset: { width: 0, height: 3 },
     elevation: 6,
   },
+  transcriptCard: {
+    flex: 1, backgroundColor: '#fff', borderRadius: 16, padding: 16,
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  transcriptHeading: { fontSize: 12, color: '#888', fontWeight: '600', marginBottom: 8 },
+  transcriptScroll: { flex: 1 },
+  transcriptText: { fontSize: 14, color: '#333', lineHeight: 22 },
 });

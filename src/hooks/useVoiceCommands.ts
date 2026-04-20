@@ -1,88 +1,117 @@
-import { useEffect, useRef } from 'react';
-import {
-  ExpoSpeechRecognitionModule,
-  useSpeechRecognitionEvent,
-} from 'expo-speech-recognition';
+﻿import { useEffect, useRef } from 'react';
+import { Audio } from 'expo-av';
 
-export type VoiceCommand =
-  | 'startRecording'
-  | 'stopRecording'
-  | 'pause'
-  | 'resume'
-  | 'playLast';
-
-type CommandHandler = (command: VoiceCommand) => void;
-
-const START_OPTIONS = { lang: 'en-US', interimResults: false } as const;
+const API_KEY = process.env.EXPO_PUBLIC_GROQ_API_KEY ?? '';
+const GROQ_STT_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
+const CHUNK_MS = 4000;
 
 /**
- * Continuously listens for hands-free voice commands.
- * Restarts automatically after each result or error so the app
- * stays responsive (important for driving use).
- *
- * Supported phrases:
- *   "record" / "start recording"
- *   "stop"   / "stop recording"
- *   "pause"  / "pause recording"
- *   "resume" / "resume recording"
- *   "play last" / "play last recording"
+ * Listens for a "start recording" voice command when idle.
+ * Only active when `active` is true (i.e. the recorder is idle).
+ * Records short 4-second mic chunks → Groq → checks for start phrase.
  */
-export function useVoiceCommands(onCommand: CommandHandler) {
-  const onCommandRef = useRef(onCommand);
-  onCommandRef.current = onCommand;
-
-  // Tracks whether this hook instance is still mounted
-  const activeRef = useRef(false);
-
-  // Classify and dispatch on final results
-  useSpeechRecognitionEvent('result', (event) => {
-    const results = event.results ?? [];
-    results.some((r) => {
-      const lower = r.transcript.toLowerCase().trim();
-      const command = classify(lower);
-      if (command) {
-        onCommandRef.current(command);
-        return true;
-      }
-      return false;
-    });
-  });
-
-  // Restart when a session ends (covers normal end, no-speech timeout, errors)
-  useSpeechRecognitionEvent('end', () => {
-    if (!activeRef.current) return;
-    setTimeout(() => {
-      if (activeRef.current) {
-        ExpoSpeechRecognitionModule.start(START_OPTIONS);
-      }
-    }, 300);
-  });
+export function useVoiceCommands(
+  onStartCommand: () => void,
+  active: boolean,
+) {
+  const loopRef = useRef(false);
+  const onStartRef = useRef(onStartCommand);
+  onStartRef.current = onStartCommand;
 
   useEffect(() => {
-    activeRef.current = true;
+    if (!active) {
+      loopRef.current = false;
+      return;
+    }
 
-    ExpoSpeechRecognitionModule.requestPermissionsAsync().then(({ granted }) => {
-      if (granted && activeRef.current) {
-        ExpoSpeechRecognitionModule.start(START_OPTIONS);
+    loopRef.current = true;
+    let cancelled = false;
+
+    (async () => {
+      await Audio.requestPermissionsAsync();
+      while (loopRef.current && !cancelled) {
+        await runChunk();
       }
-    });
+    })();
 
     return () => {
-      activeRef.current = false;
-      ExpoSpeechRecognitionModule.abort();
+      cancelled = true;
+      loopRef.current = false;
     };
-  }, []);
+  }, [active]);
+
+  async function runChunk() {
+    let recording: Audio.Recording | null = null;
+    try {
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording: rec } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
+      );
+      recording = rec;
+      await new Promise<void>((resolve) => setTimeout(resolve, CHUNK_MS));
+      await recording.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      const uri = recording.getURI();
+      if (!uri) return;
+      const text = await transcribe(uri);
+      if (text && isStartCommand(text)) {
+        console.log('[VoiceCmd] start command detected:', JSON.stringify(text));
+        onStartRef.current();
+        loopRef.current = false; // stop the loop once triggered
+      }
+    } catch (e) {
+      console.warn('[VoiceCmd] chunk error:', e);
+      if (recording) {
+        try { await recording.stopAndUnloadAsync(); } catch {}
+        try { await Audio.setAudioModeAsync({ allowsRecordingIOS: false }); } catch {}
+      }
+      // Brief pause before retry so we don't hammer on error
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+    }
+  }
 }
 
-function classify(text: string): VoiceCommand | null {
-  if (endsWith(text, ['start recording', 'record', 'start record'])) return 'startRecording';
-  if (endsWith(text, ['stop recording', 'stop'])) return 'stopRecording';
-  if (endsWith(text, ['pause recording', 'pause'])) return 'pause';
-  if (endsWith(text, ['resume recording', 'resume'])) return 'resume';
-  if (endsWith(text, ['play last recording', 'play last'])) return 'playLast';
-  return null;
+async function transcribe(uri: string): Promise<string> {
+  try {
+    const formData = new FormData();
+    formData.append('file', { uri, type: 'audio/m4a', name: 'audio.m4a' } as unknown as Blob);
+    formData.append('model', 'whisper-large-v3-turbo');
+    formData.append('response_format', 'json');
+    formData.append('language', 'en');
+
+    const res = await fetch(GROQ_STT_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${API_KEY}` },
+      body: formData,
+    });
+    if (!res.ok) return '';
+    const json = await res.json();
+    return (json.text ?? '').trim().toLowerCase();
+  } catch {
+    return '';
+  }
 }
 
-function endsWith(text: string, phrases: string[]): boolean {
-  return phrases.some((p) => text === p || text.endsWith(' ' + p));
+function normalize(text: string): string {
+  return text.replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function hasPhrase(text: string, phrases: string[]): boolean {
+  return phrases.some((p) => {
+    const idx = text.indexOf(p);
+    if (idx === -1) return false;
+    const before = idx === 0 || text[idx - 1] === ' ';
+    const after = idx + p.length === text.length || text[idx + p.length] === ' ';
+    return before && after;
+  });
+}
+
+function isStartCommand(raw: string): boolean {
+  const text = normalize(raw);
+  if (text.split(' ').length > 6) return false;
+  return (
+    text === 'record' ||
+    text === 'start recording' ||
+    hasPhrase(text, ['start recording', 'start a recording', 'begin recording', 'new recording'])
+  );
 }

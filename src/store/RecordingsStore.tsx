@@ -67,7 +67,11 @@ export function RecordingsProvider({ children }: { children: React.ReactNode }) 
   const deleteRecording = useCallback(async (id: string) => {
     setRecordings((prev) => {
       const target = prev.find((r) => r.id === id);
-      if (target) FileSystem.deleteAsync(target.fileUri, { idempotent: true });
+      if (target) {
+        // Delete all segment files (or the single file for legacy recordings)
+        const uris = target.segmentUris?.length ? target.segmentUris : [target.fileUri];
+        uris.forEach((uri) => FileSystem.deleteAsync(uri, { idempotent: true }));
+      }
       const next = prev.filter((r) => r.id !== id);
       AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
       return next;

@@ -1,68 +1,110 @@
-import React, { useState, useCallback } from 'react';
+﻿import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  Alert, TextInput, Modal, Pressable, ListRenderItemInfo,
+  Alert, TextInput, Modal, Pressable, ListRenderItemInfo, ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useRecordingsStore } from '../store/RecordingsStore';
-import { useAudioRecorder } from '../hooks/useAudioRecorder';
+import { useAudioRecorder, formatTitle } from '../hooks/useAudioRecorder';
 import { useVoiceCommands } from '../hooks/useVoiceCommands';
+import { useRecordingTranscript } from '../hooks/useRecordingTranscript';
 import { Recording } from '../types/Recording';
 import { RootStackParamList } from './types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'List'>;
 
 export default function RecordingListScreen({ navigation }: Props) {
-  const { recordings, newFileUri, addRecording, deleteRecording, renameRecording } = useRecordingsStore();
+  const { recordings, addRecording, deleteRecording, renameRecording } = useRecordingsStore();
   const recorder = useAudioRecorder();
   const [renameTarget, setRenameTarget] = useState<Recording | null>(null);
   const [renameText, setRenameText] = useState('');
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  // ── Voice commands ──────────────────────────────────────────────────────────
-  const handleVoiceCommand = useCallback(
-    async (cmd: import('../hooks/useVoiceCommands').VoiceCommand) => {
-      switch (cmd) {
-        case 'startRecording':
-          if (recorder.state === 'idle') {
-            const uri = newFileUri();
-            await recorder.start(uri);
-          }
-          break;
-        case 'stopRecording':
-          if (recorder.state !== 'idle') {
-            await recorder.stop(addRecording);
-          }
-          break;
-        case 'pause':
-          await recorder.pause();
-          break;
-        case 'resume':
-          await recorder.resume();
-          break;
-        case 'playLast':
-          if (recordings.length > 0) {
-            navigation.navigate('Playback', { recording: recordings[0] });
-          }
-          break;
-      }
-    },
-    [recorder, recordings, newFileUri, addRecording, navigation]
+  // Keeps segment URIs collected during a recording session
+  const sessionSegmentsRef = useRef<string[]>([]);
+
+  // ── Transcript + command detection ─────────────────────────────────────────
+  // Use a ref so the stable callback always dispatches to the latest functions.
+  type TranscriptCmd = import('../hooks/useRecordingTranscript').TranscriptCommand;
+  const transcriptCmdRef = useRef<(cmd: TranscriptCmd) => Promise<void>>(async () => {});
+
+  // Stable callback — safe to pass as a dep to useRecordingTranscript.
+  const handleTranscriptCommand = useCallback(
+    (cmd: TranscriptCmd) => transcriptCmdRef.current(cmd),
+    [],
   );
 
-  useVoiceCommands(handleVoiceCommand);
+  const { processSegment, waitForPending, reset: resetTranscript, getTranscript } =
+    useRecordingTranscript(handleTranscriptCommand);
 
-  // ── Record button ────────────────────────────────────────────────────────────
+  // ── Idle voice command (start recording) ───────────────────────────────────
+  useVoiceCommands(
+    useCallback(() => { handleRecordPress(); }, []),
+    recorder.state === 'idle' && !saving,
+  );
+
+  // ── Segment callback (called by recorder every ~5 s) ──────────────────────
+  const handleSegment = useCallback(
+    (uri: string, _segDuration: number) => {
+      sessionSegmentsRef.current.push(uri);
+      processSegment(uri).then((full) => setLiveTranscript(full));
+    },
+    [processSegment],
+  );
+
+  // ── Stop + save ────────────────────────────────────────────────────────────
+  const stopAndSave = useCallback(async () => {
+    if (recorder.state === 'idle' || saving) return;
+    setSaving(true);
+    try {
+      const { segmentUris, duration } = await recorder.stop();
+      // Wait for any in-flight Groq calls (including the final segment)
+      await waitForPending();
+      const transcript = getTranscript();
+      const now = new Date();
+      const recording: Recording = {
+        id: now.getTime().toString(),
+        title: formatTitle(now),
+        fileUri: segmentUris[0] ?? '',
+        segmentUris,
+        createdAt: now.toISOString(),
+        duration,
+        transcript: transcript || undefined,
+      };
+      await addRecording(recording);
+    } finally {
+      resetTranscript();
+      setLiveTranscript('');
+      sessionSegmentsRef.current = [];
+      setSaving(false);
+    }
+  }, [recorder, saving, waitForPending, getTranscript, addRecording, resetTranscript]);
+
+  // Keep the ref in sync with the latest functions on every render,
+  // so the stable handleTranscriptCommand always dispatches to the current closures.
+  transcriptCmdRef.current = async (cmd: TranscriptCmd) => {
+    if (cmd === 'stopRecording') {
+      await stopAndSave();
+    } else if (cmd === 'pause') {
+      await recorder.pause();
+    } else if (cmd === 'resume') {
+      await recorder.resume();
+    }
+  };
+
+  // ── Record button ──────────────────────────────────────────────────────────
   async function handleRecordPress() {
     if (recorder.state === 'idle') {
-      const uri = newFileUri();
-      await recorder.start(uri);
+      sessionSegmentsRef.current = [];
+      await recorder.start(handleSegment);
     } else {
-      await recorder.stop(addRecording);
+      await stopAndSave();
     }
   }
 
-  // ── Row actions ──────────────────────────────────────────────────────────────
+  // ── Row actions ────────────────────────────────────────────────────────────
   function confirmDelete(recording: Recording) {
     Alert.alert('Delete Recording', `Delete "${recording.title}"?`, [
       { text: 'Cancel', style: 'cancel' },
@@ -82,7 +124,7 @@ export default function RecordingListScreen({ navigation }: Props) {
     setRenameTarget(null);
   }
 
-  // ── Render ───────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   function renderItem({ item }: ListRenderItemInfo<Recording>) {
     return (
       <TouchableOpacity
@@ -111,13 +153,15 @@ export default function RecordingListScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      {/* Voice-command status banner */}
-      <View style={styles.voiceBanner}>
-        <Ionicons name="volume-medium-outline" size={14} color="#555" />
-        <Text style={styles.voiceBannerText}>
-          Listening · say "record", "stop", "pause", "resume", "play last"
-        </Text>
-      </View>
+      {/* Voice-command status banner (idle only) */}
+      {!isRecording && !saving && (
+        <View style={styles.voiceBanner}>
+          <Ionicons name="volume-medium-outline" size={14} color="#555" />
+          <Text style={styles.voiceBannerText}>
+            Listening · say "record" or "start recording"
+          </Text>
+        </View>
+      )}
 
       {/* Recording timer */}
       {isRecording && (
@@ -137,6 +181,27 @@ export default function RecordingListScreen({ navigation }: Props) {
         </View>
       )}
 
+      {/* Live transcript while recording */}
+      {isRecording && (
+        <View style={styles.transcriptBox}>
+          <Text style={styles.transcriptLabel}>
+            <Ionicons name="text-outline" size={11} color="#888" /> Live transcript
+          </Text>
+          <ScrollView style={styles.transcriptScroll}>
+            <Text style={styles.transcriptText}>
+              {liveTranscript || 'Transcribing…'}
+            </Text>
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Saving indicator */}
+      {saving && (
+        <View style={styles.savingBanner}>
+          <Text style={styles.savingText}>Saving…</Text>
+        </View>
+      )}
+
       <FlatList
         data={recordings}
         keyExtractor={(item) => item.id}
@@ -152,6 +217,7 @@ export default function RecordingListScreen({ navigation }: Props) {
         style={[styles.recordButton, isRecording && styles.recordButtonActive]}
         onPress={handleRecordPress}
         activeOpacity={0.8}
+        disabled={saving}
       >
         {isRecording
           ? <View style={styles.stopShape} />
@@ -207,6 +273,17 @@ const styles = StyleSheet.create({
   recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' },
   timerText: { color: '#fff', fontVariant: ['tabular-nums'], fontSize: 16, flex: 1 },
   pauseBtn: { padding: 4 },
+  transcriptBox: {
+    backgroundColor: '#fff', borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#ddd',
+    paddingHorizontal: 14, paddingTop: 8, paddingBottom: 6, maxHeight: 100,
+  },
+  transcriptLabel: { fontSize: 10, color: '#888', marginBottom: 4 },
+  transcriptScroll: { flexGrow: 0 },
+  transcriptText: { fontSize: 13, color: '#333', lineHeight: 18 },
+  savingBanner: {
+    backgroundColor: '#e8f5e9', padding: 10, alignItems: 'center',
+  },
+  savingText: { color: '#388e3c', fontSize: 13, fontWeight: '600' },
   list: { paddingVertical: 8 },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
   emptyText: { textAlign: 'center', color: '#999', fontSize: 15, lineHeight: 24 },
