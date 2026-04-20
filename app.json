@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "Voice Memos",
+    "slug": "voice-memos",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.yourteam.voicememos",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Voice Memos needs microphone access to record your audio memos.",
+        "NSSpeechRecognitionUsageDescription": "Voice Memos uses speech recognition so you can control the app hands-free while driving.",
+        "UIBackgroundModes": [
+          "audio"
+        ]
+      }
+    },
+    "android": {
+      "package": "com.yourteam.voicememos",
+      "permissions": [
+        "RECORD_AUDIO",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "plugins": [
+      "expo-av",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Voice Memos needs microphone access to record your audio memos.",
+          "speechRecognitionPermission": "Voice Memos uses speech recognition so you can control the app hands-free while driving."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.0"
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "8ba682f9-4ee1-4e4e-b9c5-4f2c97c6de29"
+      }
+    }
+  }
+}
