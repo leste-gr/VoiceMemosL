@@ -48,7 +48,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             ENABLE_BITCODE=NO \
-            | xcpretty || true
+            | xcpretty && exit ${PIPESTATUS[0]}
 
       - name: Package as IPA
         run: |
