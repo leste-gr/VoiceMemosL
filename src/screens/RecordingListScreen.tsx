@@ -52,15 +52,21 @@ export default function RecordingListScreen({ navigation }: Props) {
   // Uses only stable refs for the guard — no dependency on React state closures.
   const stopAndSave = useCallback(async () => {
     if (!isActiveRecordingRef.current || isSavingRef.current) return;
-    // Flip interlock synchronously before first await to block any concurrent calls
+    // Flip interlocks synchronously BEFORE any await.
+    // isActiveRecordingRef=false gates handleTranscriptCommand so no new commands fire.
     isActiveRecordingRef.current = false;
     isSavingRef.current = true;
     setSaving(true);
-    resetTranscript(); // immediately disable in-flight Groq callbacks
+    // NOTE: do NOT call resetTranscript() here — it would wipe both the transcript
+    // and pendingRef, so getTranscript() would return '' and waitForPending() would
+    // skip in-flight Groq calls that still need to finish before we save.
     try {
       const { segmentUris, duration } = await recorder.stop();
+      // Wait for all in-flight Groq calls to settle (transcript still accumulates,
+      // but commands are blocked by isActiveRecordingRef=false above).
       await waitForPending();
       const transcript = getTranscript();
+      console.log('[StopSave] segments:', segmentUris.length, 'transcript length:', transcript.length);
       const now = new Date();
       const recording: Recording = {
         id: now.getTime().toString(),
@@ -75,6 +81,7 @@ export default function RecordingListScreen({ navigation }: Props) {
     } catch (e) {
       console.warn('[RecordingList] stopAndSave error:', e);
     } finally {
+      resetTranscript(); // clear for next session (in finally so it always runs)
       setLiveTranscript('');
       sessionSegmentsRef.current = [];
       isSavingRef.current = false;

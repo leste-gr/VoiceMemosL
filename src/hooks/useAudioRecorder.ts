@@ -154,6 +154,8 @@ export function useAudioRecorder() {
    * all segment URIs and total duration.
    */
   const stop = useCallback(async (): Promise<{ segmentUris: string[]; duration: number }> => {
+    // Set activeRef FIRST (sync) so startSegment bails even if rotateSegment
+    // is mid-execution and about to call startSegment.
     activeRef.current = false;
     clearTimeout(segmentTimerRef.current!);
     segmentTimerRef.current = null;
@@ -165,17 +167,26 @@ export function useAudioRecorder() {
     let finalDuration = totalElapsedRef.current;
 
     if (rec) {
+      // Normal path: we have the recorder.
       const segDuration = segElapsedRef.current + (Date.now() - segStartRef.current) / 1000;
       finalDuration += segDuration;
-      await rec.stopAndUnloadAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      try { await rec.stopAndUnloadAsync(); } catch {}
       const uri = rec.getURI();
       if (uri) {
         segmentUrisRef.current.push(uri);
         onSegmentRef.current?.(uri, segDuration);
       }
+    } else {
+      // Race path: rotateSegment grabbed the recorder before us and is currently
+      // awaiting stopAndUnloadAsync. Give it time to finish and push its URI.
+      // startSegment will not run because activeRef is already false.
+      await new Promise<void>((resolve) => setTimeout(resolve, 600));
     }
 
+    // Always release the iOS audio session, regardless of which path ran above.
+    try { await Audio.setAudioModeAsync({ allowsRecordingIOS: false }); } catch {}
+
+    // Collect URIs now — rotateSegment (if it was running) has had time to push its URI.
     const uris = [...segmentUrisRef.current];
     segmentUrisRef.current = [];
     totalElapsedRef.current = 0;
