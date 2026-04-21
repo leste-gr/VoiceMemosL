@@ -33,27 +33,32 @@ jobs:
           cd ios
           pod install
 
-      - name: Build unsigned xcarchive
+      - name: Build ad-hoc signed xcarchive
         run: |
           cd ios
+          WORKSPACE=$(find . -name "*.xcworkspace" -maxdepth 1 | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "Workspace: $WORKSPACE  Scheme: $SCHEME"
           xcodebuild archive \
-            -workspace "VoiceMemos.xcworkspace" \
-            -scheme "VoiceMemos" \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
             -configuration Release \
             -archivePath "$RUNNER_TEMP/VoiceMemos.xcarchive" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            PROVISIONING_PROFILE="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            ENABLE_BITCODE=NO \
             | xcpretty || true
 
-      - name: Package as unsigned IPA
+      - name: Package as IPA
         run: |
           APP_PATH=$(find "$RUNNER_TEMP/VoiceMemos.xcarchive/Products" -name "*.app" | head -1)
+          echo "App path: $APP_PATH"
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -r "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"
           zip -r VoiceMemos.ipa Payload
+          echo "IPA size: $(du -sh VoiceMemos.ipa)"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
