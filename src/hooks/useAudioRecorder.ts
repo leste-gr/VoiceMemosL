@@ -125,35 +125,50 @@ export function useAudioRecorder() {
   }, [startSegment]);
 
   const pause = useCallback(async () => {
-    if (state !== 'recording' || !recorderRef.current) return;
+    // Use refs for the guard — never stale unlike React state
+    if (pausedRef.current || !activeRef.current || !recorderRef.current) return;
     clearTimeout(segmentTimerRef.current!);
     segmentTimerRef.current = null;
     stopElapsedTimer();
-    pauseElapsedRef.current = segElapsedRef.current + (Date.now() - segStartRef.current) / 1000;
-    await recorderRef.current.pauseAsync();
+
+    // Stop and save the current segment so we accumulate its duration
+    const segDuration = segElapsedRef.current + (Date.now() - segStartRef.current) / 1000;
+    totalElapsedRef.current += segDuration;
+
+    const rec = recorderRef.current;
+    recorderRef.current = null;
+    await rec.stopAndUnloadAsync();
+    const uri = rec.getURI();
+    if (uri) {
+      segmentUrisRef.current.push(uri);
+      onSegmentRef.current?.(uri, segDuration);
+    }
+
+    // Release the audio session so the voice-command listener can use the mic
+    try { await Audio.setAudioModeAsync({ allowsRecordingIOS: false }); } catch {}
+
     pausedRef.current = true;
     setState('paused');
-  }, [state, stopElapsedTimer]);
+  }, [stopElapsedTimer]);
 
   const resume = useCallback(async () => {
-    if (state !== 'paused' || !recorderRef.current) return;
-    segElapsedRef.current = pauseElapsedRef.current;
-    await recorderRef.current.startAsync();
+    // Use refs for the guard — never stale
+    if (!pausedRef.current || !activeRef.current) return;
+
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
     pausedRef.current = false;
+    segElapsedRef.current = 0;
     setState('recording');
-    startElapsedTimer();
-    const remaining = SEGMENT_MS - pauseElapsedRef.current * 1000;
-    segmentTimerRef.current = setTimeout(() => {
-      if (!activeRef.current || pausedRef.current) return;
-      rotateSegmentRef.current?.();
-    }, Math.max(remaining, 500));
-  }, [state, startElapsedTimer]);
+
+    await startSegment();
+  }, [startSegment]);
 
   /**
    * Stop recording. Emits the final segment via onSegment, then returns
    * all segment URIs and total duration.
    */
   const stop = useCallback(async (): Promise<{ segmentUris: string[]; duration: number }> => {
+    console.log('[Recorder] stop() called, activeRef=', activeRef.current, 'recorderRef=', recorderRef.current ? 'exists' : 'null');
     // Set activeRef FIRST (sync) so startSegment bails even if rotateSegment
     // is mid-execution and about to call startSegment.
     activeRef.current = false;
@@ -163,6 +178,7 @@ export function useAudioRecorder() {
 
     const rec = recorderRef.current;
     recorderRef.current = null;
+    console.log('[Recorder] stop() rec=', rec ? 'exists' : 'null (race path)');
 
     let finalDuration = totalElapsedRef.current;
 

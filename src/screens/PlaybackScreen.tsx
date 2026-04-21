@@ -1,5 +1,5 @@
 ﻿import React, { useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Share, Alert } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -20,6 +20,17 @@ export default function PlaybackScreen({ route }: Props) {
   function handlePlayPause() {
     if (playerState === 'playing') pause();
     else play();
+  }
+
+  async function handleExportTranscript() {
+    if (!recording.transcript) {
+      Alert.alert('No transcript', 'This recording has no transcript to export.');
+      return;
+    }
+    await Share.share({
+      title: recording.title,
+      message: `${recording.title}\n${new Date(recording.createdAt).toLocaleString()}\n\n${recording.transcript}`,
+    });
   }
 
   const segmentCount = recording.segmentUris?.length ?? 1;
@@ -85,9 +96,15 @@ export default function PlaybackScreen({ route }: Props) {
       {/* Transcript (if available) */}
       {!!recording.transcript && (
         <View style={styles.transcriptCard}>
-          <Text style={styles.transcriptHeading}>
-            <Ionicons name="text-outline" size={13} color="#888" /> Transcript
-          </Text>
+          <View style={styles.transcriptHeader}>
+            <Text style={styles.transcriptHeading}>
+              <Ionicons name="text-outline" size={13} color="#888" /> Transcript
+            </Text>
+            <TouchableOpacity onPress={handleExportTranscript} style={styles.exportBtn}>
+              <Ionicons name="share-outline" size={16} color="#e53935" />
+              <Text style={styles.exportLabel}>Export</Text>
+            </TouchableOpacity>
+          </View>
           <ScrollView style={styles.transcriptScroll} showsVerticalScrollIndicator>
             <Text style={styles.transcriptText}>{recording.transcript}</Text>
           </ScrollView>
@@ -132,7 +149,10 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
-  transcriptHeading: { fontSize: 12, color: '#888', fontWeight: '600', marginBottom: 8 },
+  transcriptHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  transcriptHeading: { fontSize: 12, color: '#888', fontWeight: '600' },
+  exportBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2, paddingHorizontal: 8, borderRadius: 12, borderWidth: 1, borderColor: '#e53935' },
+  exportLabel: { fontSize: 12, color: '#e53935', fontWeight: '600' },
   transcriptScroll: { flex: 1 },
   transcriptText: { fontSize: 14, color: '#333', lineHeight: 22 },
 });

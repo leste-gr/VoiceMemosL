@@ -6,17 +6,23 @@ const GROQ_STT_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const CHUNK_MS = 4000;
 
 /**
- * Listens for a "start recording" voice command when idle.
- * Only active when `active` is true (i.e. the recorder is idle).
- * Records short 4-second mic chunks → Groq → checks for start phrase.
+ * Listens for voice commands when idle or paused.
+ * - When `activeStart` is true: listens for "start recording".
+ * - When `activePaused` is true: listens for "resume recording".
  */
 export function useVoiceCommands(
   onStartCommand: () => void,
-  active: boolean,
+  activeStart: boolean,
+  onResumeCommand?: () => void,
+  activePaused?: boolean,
 ) {
   const loopRef = useRef(false);
   const onStartRef = useRef(onStartCommand);
   onStartRef.current = onStartCommand;
+  const onResumeRef = useRef(onResumeCommand);
+  onResumeRef.current = onResumeCommand;
+
+  const active = activeStart || !!activePaused;
 
   useEffect(() => {
     if (!active) {
@@ -54,10 +60,15 @@ export function useVoiceCommands(
       const uri = recording.getURI();
       if (!uri) return;
       const text = await transcribe(uri);
-      if (text && isStartCommand(text)) {
+      if (!text) return;
+      if (activeStart && isStartCommand(text)) {
         console.log('[VoiceCmd] start command detected:', JSON.stringify(text));
         onStartRef.current();
-        loopRef.current = false; // stop the loop once triggered
+        loopRef.current = false;
+      } else if (activePaused && isResumeCommand(text)) {
+        console.log('[VoiceCmd] resume command detected:', JSON.stringify(text));
+        onResumeRef.current?.();
+        loopRef.current = false;
       }
     } catch (e) {
       console.warn('[VoiceCmd] chunk error:', e);
@@ -113,5 +124,14 @@ function isStartCommand(raw: string): boolean {
     text === 'record' ||
     text === 'start recording' ||
     hasPhrase(text, ['start recording', 'start a recording', 'begin recording', 'new recording'])
+  );
+}
+
+function isResumeCommand(raw: string): boolean {
+  const text = normalize(raw);
+  if (text.split(' ').length > 4) return false;
+  return (
+    text === 'resume recording' ||
+    hasPhrase(text, ['resume recording', 'continue recording'])
   );
 }

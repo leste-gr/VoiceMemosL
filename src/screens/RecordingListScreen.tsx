@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useIsFocused } from '@react-navigation/native';
 import { useRecordingsStore } from '../store/RecordingsStore';
 import { useAudioRecorder, formatTitle } from '../hooks/useAudioRecorder';
 import { useVoiceCommands } from '../hooks/useVoiceCommands';
@@ -15,6 +16,7 @@ import { RootStackParamList } from './types';
 type Props = NativeStackScreenProps<RootStackParamList, 'List'>;
 
 export default function RecordingListScreen({ navigation }: Props) {
+  const isFocused = useIsFocused();
   const { recordings, addRecording, deleteRecording, renameRecording } = useRecordingsStore();
   const recorder = useAudioRecorder();
   const [renameTarget, setRenameTarget] = useState<Recording | null>(null);
@@ -38,8 +40,12 @@ export default function RecordingListScreen({ navigation }: Props) {
   const transcriptCmdRef = useRef<(cmd: TranscriptCmd) => void>(() => {});
   const handleTranscriptCommand = useCallback(
     (cmd: TranscriptCmd) => {
+      console.log('[CMD] handleTranscriptCommand called, cmd=', cmd, 'isActive=', isActiveRecordingRef.current);
       // Ignore commands that arrive after recording has already been stopped
-      if (!isActiveRecordingRef.current) return;
+      if (!isActiveRecordingRef.current) {
+        console.log('[CMD] ignored — recording not active');
+        return;
+      }
       transcriptCmdRef.current(cmd);
     },
     [],
@@ -51,7 +57,11 @@ export default function RecordingListScreen({ navigation }: Props) {
   // ── Stop + save ────────────────────────────────────────────────────────────
   // Uses only stable refs for the guard — no dependency on React state closures.
   const stopAndSave = useCallback(async () => {
-    if (!isActiveRecordingRef.current || isSavingRef.current) return;
+    console.log('[StopSave] called, isActive=', isActiveRecordingRef.current, 'isSaving=', isSavingRef.current);
+    if (!isActiveRecordingRef.current || isSavingRef.current) {
+      console.log('[StopSave] guard blocked — returning early');
+      return;
+    }
     // Flip interlocks synchronously BEFORE any await.
     // isActiveRecordingRef=false gates handleTranscriptCommand so no new commands fire.
     isActiveRecordingRef.current = false;
@@ -91,6 +101,7 @@ export default function RecordingListScreen({ navigation }: Props) {
 
   // Update the dispatch ref every render so pause/resume always use latest state.
   transcriptCmdRef.current = (cmd: TranscriptCmd) => {
+    console.log('[CMD] transcriptCmdRef dispatching:', cmd);
     if (cmd === 'stopRecording') {
       stopAndSave();
     } else if (cmd === 'pause') {
@@ -108,10 +119,12 @@ export default function RecordingListScreen({ navigation }: Props) {
     [processSegment],
   );
 
-  // ── Idle voice command (start recording) ───────────────────────────────────
+  // ── Idle voice command (start / resume recording) ──────────────────────────
   useVoiceCommands(
     useCallback(() => { handleRecordPress(); }, []),
-    recorder.state === 'idle' && !saving,
+    isFocused && recorder.state === 'idle' && !saving,
+    useCallback(() => { recorder.resume(); }, [recorder.resume]),
+    isFocused && recorder.state === 'paused',
   );
 
   // ── Record button ──────────────────────────────────────────────────────────
@@ -121,6 +134,8 @@ export default function RecordingListScreen({ navigation }: Props) {
       isActiveRecordingRef.current = true;
       enableTranscript();
       await recorder.start(handleSegment);
+    } else if (recorder.state === 'paused') {
+      await recorder.resume();
     } else if (isActiveRecordingRef.current) {
       await stopAndSave();
     }
@@ -195,11 +210,6 @@ export default function RecordingListScreen({ navigation }: Props) {
               <Ionicons name="pause" size={18} color="#fff" />
             </TouchableOpacity>
           )}
-          {recorder.state === 'paused' && (
-            <TouchableOpacity onPress={recorder.resume} style={styles.pauseBtn}>
-              <Ionicons name="play" size={18} color="#fff" />
-            </TouchableOpacity>
-          )}
         </View>
       )}
 
@@ -234,16 +244,22 @@ export default function RecordingListScreen({ navigation }: Props) {
         }
       />
 
-      {/* Record / Stop button */}
+      {/* Record / Stop / Resume button */}
       <TouchableOpacity
-        style={[styles.recordButton, isRecording && styles.recordButtonActive]}
+        style={[
+          styles.recordButton,
+          recorder.state === 'recording' && styles.recordButtonActive,
+          recorder.state === 'paused' && styles.recordButtonPaused,
+        ]}
         onPress={handleRecordPress}
         activeOpacity={0.8}
         disabled={saving}
       >
-        {isRecording
+        {recorder.state === 'recording'
           ? <View style={styles.stopShape} />
-          : <View style={styles.startShape} />}
+          : recorder.state === 'paused'
+            ? <Ionicons name="play" size={28} color="#fff" />
+            : <View style={styles.startShape} />}
       </TouchableOpacity>
 
       {/* Rename modal */}
@@ -329,6 +345,7 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   recordButtonActive: { backgroundColor: '#b71c1c' },
+  recordButtonPaused: { backgroundColor: '#e65100' },
   startShape: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#fff' },
   stopShape: { width: 24, height: 24, borderRadius: 4, backgroundColor: '#fff' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 32 },

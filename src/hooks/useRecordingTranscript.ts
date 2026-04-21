@@ -104,16 +104,12 @@ async function doTranscribe(
 }
 
 function normalize(text: string): string {
-  return text.replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  return text.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function detectCommand(text: string): TranscriptCommand | null {
-  if (hasPhrase(text, ['stop recording', 'end recording', 'finish recording'])) return 'stopRecording';
-  if (text === 'stop' || text === 'end' || text === 'finish') return 'stopRecording';
+  if (hasPhrase(text, ['stop recording'])) return 'stopRecording';
   if (hasPhrase(text, ['pause recording'])) return 'pause';
-  if (text === 'pause') return 'pause';
-  if (hasPhrase(text, ['resume recording', 'continue recording', 'unpause'])) return 'resume';
-  if (text === 'resume' || text === 'continue') return 'resume';
   return null;
 }
 
