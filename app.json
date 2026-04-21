@@ -12,7 +12,7 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.yourteam.voicememos",
+      "bundleIdentifier": "com.leste.voicememos",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Voice Memos needs microphone access to record your audio memos.",
         "UIBackgroundModes": [
