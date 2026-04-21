@@ -1,4 +1,5 @@
 ﻿import { useState, useRef, useCallback } from 'react';
+import { Alert } from 'react-native';
 import { Audio } from 'expo-av';
 
 export type RecorderState = 'idle' | 'recording' | 'paused';
@@ -65,20 +66,25 @@ export function useAudioRecorder() {
   const startSegment = useCallback(async () => {
     if (!activeRef.current) return;
     segElapsedRef.current = 0;
+    try {
+      const { recording } = await Audio.Recording.createAsync(
+        RECORDING_OPTIONS,
+        undefined,
+        100,
+      );
+      recorderRef.current = recording;
+      startElapsedTimer();
 
-    const { recording } = await Audio.Recording.createAsync(
-      RECORDING_OPTIONS,
-      undefined,
-      100,
-    );
-    recorderRef.current = recording;
-    startElapsedTimer();
-
-    // Auto-rotate after SEGMENT_MS
-    segmentTimerRef.current = setTimeout(() => {
-      if (!activeRef.current || pausedRef.current) return;
-      rotateSegmentRef.current?.();
-    }, SEGMENT_MS);
+      // Auto-rotate after SEGMENT_MS
+      segmentTimerRef.current = setTimeout(() => {
+        if (!activeRef.current || pausedRef.current) return;
+        rotateSegmentRef.current?.();
+      }, SEGMENT_MS);
+    } catch (e: any) {
+      Alert.alert('Recording Error', `startSegment failed: ${e?.message ?? e}`);
+      activeRef.current = false;
+      setState('idle');
+    }
   }, [startElapsedTimer]);
 
   /** Stop current segment, emit callback with real URI, start the next one. */
@@ -108,8 +114,13 @@ export function useAudioRecorder() {
   rotateSegmentRef.current = rotateSegment;
 
   const start = useCallback(async (onSegment: OnSegment) => {
-    await Audio.requestPermissionsAsync();
-    await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+    try {
+      await Audio.requestPermissionsAsync();
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+    } catch (e: any) {
+      Alert.alert('Audio Setup Error', `setAudioMode failed: ${e?.message ?? e}`);
+      return;
+    }
 
     activeRef.current = true;
     pausedRef.current = false;
