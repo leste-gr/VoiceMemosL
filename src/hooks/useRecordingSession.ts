@@ -84,8 +84,8 @@ export function useRecordingSession(transcriptLang: SpeechLocale = 'el-GR') {
       lang: transcriptLang,
       interimResults: true,
       continuous: true,
-      // Match useVoiceCommands: use on-device only to avoid network STT issues
-      requiresOnDeviceRecognition: true,
+      // Allow network fallback for transcription to ensure both EN/EL work reliably
+      requiresOnDeviceRecognition: false,
       addsPunctuation: true,
       iosTaskHint: 'dictation',
       recordingOptions: { persist: true },
