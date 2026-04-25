@@ -95,7 +95,9 @@ export function useVoiceCommands(
         lang: locale,
         interimResults: false,
         continuous: false,
-        requiresOnDeviceRecognition: true,
+        // Allow network fallback for idle listening (more reliable for English)
+        // Recording uses on-device only for quality
+        requiresOnDeviceRecognition: false,
         iosTaskHint: 'confirmation',
       });
     }
