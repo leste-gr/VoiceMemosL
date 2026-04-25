@@ -6,23 +6,17 @@ const GROQ_STT_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const CHUNK_MS = 4000;
 
 /**
- * Listens for voice commands when idle or paused.
- * - When `activeStart` is true: listens for "start recording".
- * - When `activePaused` is true: listens for "resume recording".
+ * Listens for a voice command to start recording when idle.
  */
 export function useVoiceCommands(
   onStartCommand: () => void,
   activeStart: boolean,
-  onResumeCommand?: () => void,
-  activePaused?: boolean,
 ) {
   const loopRef = useRef(false);
   const onStartRef = useRef(onStartCommand);
   onStartRef.current = onStartCommand;
-  const onResumeRef = useRef(onResumeCommand);
-  onResumeRef.current = onResumeCommand;
 
-  const active = activeStart || !!activePaused;
+  const active = activeStart;
 
   useEffect(() => {
     if (!active) {
@@ -64,10 +58,6 @@ export function useVoiceCommands(
       if (activeStart && isStartCommand(text)) {
         console.log('[VoiceCmd] start command detected:', JSON.stringify(text));
         onStartRef.current();
-        loopRef.current = false;
-      } else if (activePaused && isResumeCommand(text)) {
-        console.log('[VoiceCmd] resume command detected:', JSON.stringify(text));
-        onResumeRef.current?.();
         loopRef.current = false;
       }
     } catch (e) {
@@ -126,11 +116,4 @@ function isStartCommand(raw: string): boolean {
   );
 }
 
-function isResumeCommand(raw: string): boolean {
-  const text = normalize(raw);
-  if (text.split(' ').length > 4) return false;
-  return (
-    text === 'resume recording' ||
-    hasPhrase(text, ['resume recording', 'continue recording'])
-  );
-}
+

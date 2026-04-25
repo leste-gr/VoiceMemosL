@@ -3,7 +3,7 @@
 const API_KEY = process.env.EXPO_PUBLIC_GROQ_API_KEY ?? '';
 const GROQ_STT_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 
-export type TranscriptCommand = 'stopRecording' | 'pause' | 'resume';
+export type TranscriptCommand = 'stopRecording';
 
 type OnCommand = (cmd: TranscriptCommand) => void;
 
@@ -62,7 +62,7 @@ async function doTranscribe(
     formData.append('file', { uri, type: 'audio/m4a', name: 'audio.m4a' } as unknown as Blob);
     formData.append('model', 'whisper-large-v3-turbo');
     formData.append('response_format', 'json');
-    formData.append('language', 'en');
+    // No language param — Whisper auto-detects and transcribes in the spoken language.
 
     const res = await fetch(GROQ_STT_URL, {
       method: 'POST',
@@ -104,12 +104,19 @@ async function doTranscribe(
 }
 
 function normalize(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  // Keep all Unicode letters/digits (including Greek) — only collapse punctuation/symbols to spaces.
+  return text.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
+const STOP_PHRASES = [
+  // English
+  'stop recording', 'stop the recording', 'end recording', 'finish recording',
+  // Greek
+  'σταμάτα εγγραφή', 'σταμάτα την εγγραφή', 'τέλος εγγραφής','σταμάτησε εγγραφή', 'σταμάτησε την εγγραφή',
+];
+
 function detectCommand(text: string): TranscriptCommand | null {
-  if (hasPhrase(text, ['stop recording'])) return 'stopRecording';
-  if (hasPhrase(text, ['pause recording'])) return 'pause';
+  if (hasPhrase(text, STOP_PHRASES)) return 'stopRecording';
   return null;
 }
 

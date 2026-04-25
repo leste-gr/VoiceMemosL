@@ -122,10 +122,6 @@ export default function RecordingListScreen({ navigation }: Props) {
     console.log('[CMD] transcriptCmdRef dispatching:', cmd);
     if (cmd === 'stopRecording') {
       stopAndSave();
-    } else if (cmd === 'pause') {
-      recorder.pause();
-    } else if (cmd === 'resume') {
-      recorder.resume();
     }
   };
 
@@ -137,12 +133,10 @@ export default function RecordingListScreen({ navigation }: Props) {
     [processSegment],
   );
 
-  // ── Idle voice command (start / resume recording) ──────────────────────────
+  // ── Idle voice command (start recording) ─────────────────────────────────
   useVoiceCommands(
     useCallback(() => { handleRecordPress(); }, []),
     isFocused && recorder.state === 'idle' && !saving,
-    useCallback(() => { recorder.resume(); }, [recorder.resume]),
-    isFocused && recorder.state === 'paused',
   );
 
   // ── Record button ──────────────────────────────────────────────────────────
@@ -152,8 +146,6 @@ export default function RecordingListScreen({ navigation }: Props) {
       isActiveRecordingRef.current = true;
       enableTranscript();
       await recorder.start(handleSegment);
-    } else if (recorder.state === 'paused') {
-      await recorder.resume();
     } else if (isActiveRecordingRef.current) {
       await stopAndSave();
     }
@@ -223,11 +215,6 @@ export default function RecordingListScreen({ navigation }: Props) {
         <View style={styles.timerBanner}>
           <View style={styles.recDot} />
           <Text style={styles.timerText}>{formatDuration(recorder.elapsed)}</Text>
-          {recorder.state === 'recording' && (
-            <TouchableOpacity onPress={recorder.pause} style={styles.pauseBtn}>
-              <Ionicons name="pause" size={18} color="#fff" />
-            </TouchableOpacity>
-          )}
         </View>
       )}
 
@@ -310,7 +297,6 @@ const styles = StyleSheet.create({
   },
   recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' },
   timerText: { color: '#fff', fontVariant: ['tabular-nums'], fontSize: 16, flex: 1 },
-  pauseBtn: { padding: 4 },
   transcriptBox: {
     backgroundColor: '#fff', borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#ddd',
     paddingHorizontal: 14, paddingTop: 8, paddingBottom: 6, maxHeight: 100,
