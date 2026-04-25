@@ -32,6 +32,7 @@ export function useVoiceCommands(
 
     let cancelled = false;
     let triggered = false;
+    let languageChanged = false;
     const subs: { remove(): void }[] = [];
 
     subs.push(
@@ -42,6 +43,9 @@ export function useVoiceCommands(
 
         const requestedLanguage = getLanguageCommand(text);
         if (requestedLanguage) {
+          languageChanged = true;
+          onDebugRef.current?.(text, 'language-switch');
+          ExpoSpeechRecognitionModule.abort();
           onLanguageRef.current?.(requestedLanguage);
           return;
         }
@@ -63,16 +67,18 @@ export function useVoiceCommands(
 
     subs.push(
       ExpoSpeechRecognitionModule.addListener('start', () => {
+        // Reset language-change flag after new session starts with new locale
+        languageChanged = false;
         onDebugRef.current?.('', 'listening');
       }),
     );
 
-    // After each session ends (silence / OS timeout), restart unless triggered.
+    // After each session ends (silence / OS timeout), restart unless triggered or language was just changed.
     subs.push(
       ExpoSpeechRecognitionModule.addListener('end', () => {
-        if (triggered || cancelled) return;
+        if (triggered || cancelled || languageChanged) return;
         setTimeout(() => {
-          if (!triggered && !cancelled && activeRef.current) tryStart();
+          if (!triggered && !cancelled && !languageChanged && activeRef.current) tryStart();
         }, 300);
       }),
     );
