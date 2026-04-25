@@ -164,6 +164,8 @@ export default function RecordingListScreen({ navigation }: Props) {
 
   const isRecording = session.state === 'recording';
   const languageLabel = speechLocale === 'el-GR' ? 'Greek' : 'English';
+  const startCommand = speechLocale === 'el-GR' ? 'εγγραφη' : 'record';
+  const switchCommand = speechLocale === 'el-GR' ? 'English' : 'Greek';
   const buildNumber = process.env.EXPO_PUBLIC_BUILD_NUMBER;
   const versionLabel = buildNumber ? `v1.0 (build ${buildNumber})` : 'dev';
 
@@ -174,7 +176,7 @@ export default function RecordingListScreen({ navigation }: Props) {
         <View style={styles.voiceBanner}>
           <Ionicons name="volume-medium-outline" size={14} color="#555" />
           <Text style={styles.voiceBannerText}>
-            Listening ({languageLabel}) • say "English" or "Greek"
+            Say "{startCommand}" to record • "{switchCommand}" to switch
           </Text>
           <View style={styles.langSwitch}>
             <TouchableOpacity
