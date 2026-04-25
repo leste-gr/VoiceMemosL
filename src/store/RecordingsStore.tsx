@@ -36,14 +36,35 @@ export function RecordingsProvider({ children }: { children: React.ReactNode }) 
       const raw = await AsyncStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const saved: Recording[] = JSON.parse(raw);
-      // Filter out records whose file no longer exists
-      const valid = await Promise.all(
-        saved.map(async (r) => {
-          const info = await FileSystem.getInfoAsync(r.fileUri);
-          return info.exists ? r : null;
+      // Validate each record independently so one bad/corrupt entry does not
+      // drop the whole list. Also validate segment-based recordings.
+      const checked = await Promise.all(
+        saved.map(async (r): Promise<Recording | null> => {
+          try {
+            const uris = r.segmentUris?.length ? r.segmentUris : [r.fileUri];
+            const existing: string[] = [];
+            for (const uri of uris) {
+              if (!uri) continue;
+              const info = await FileSystem.getInfoAsync(uri);
+              if (info.exists) existing.push(uri);
+            }
+            if (!existing.length) return null;
+
+            return {
+              ...r,
+              fileUri: existing[0],
+              segmentUris: existing,
+            };
+          } catch {
+            return null;
+          }
         })
       );
-      setRecordings(valid.filter((r): r is Recording => r !== null));
+
+      const valid = checked.filter((r): r is Recording => r !== null);
+      // Persist sanitized list so removed/corrupt records do not reappear.
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
+      setRecordings(valid);
     } catch {}
   }
 

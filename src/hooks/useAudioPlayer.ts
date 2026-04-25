@@ -4,6 +4,17 @@ import { Recording } from '../types/Recording';
 
 export type PlayerState = 'idle' | 'playing' | 'paused';
 
+// AAC-in-m4a chunks usually contain tiny encoder delay/padding at boundaries.
+// Skipping a small amount at the start of non-first segments makes transitions
+// sound continuous without affecting intelligible speech.
+const PRELOAD_WINDOW_MS = 3000;
+const EARLY_SWITCH_MS = 140;
+const CHUNK_LEADING_TRIM_MS = 35;
+
+function segmentStartTrimMs(index: number): number {
+  return index > 0 ? CHUNK_LEADING_TRIM_MS : 0;
+}
+
 export function useAudioPlayer() {
   const [playerState, setPlayerState] = useState<PlayerState>('idle');
   const [currentTime, setCurrentTime] = useState(0);
@@ -19,6 +30,7 @@ export function useAudioPlayer() {
   const segmentOffsetRef = useRef(0);
   const totalDurationRef = useRef(0);
   const isPlayingRef = useRef(false);
+  const preloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Forward refs to break circular useCallback dependencies
   const loadSegmentRef = useRef<(index: number, autoPlay: boolean) => Promise<void>>(async () => {});
@@ -30,7 +42,10 @@ export function useAudioPlayer() {
     const uri = segmentUrisRef.current[nextIndex];
     if (!uri) return;
     preloadingIndexRef.current = nextIndex;
-    Audio.Sound.createAsync({ uri }, { shouldPlay: false, volume: 1.0 })
+    Audio.Sound.createAsync(
+      { uri },
+      { shouldPlay: false, volume: 1.0, positionMillis: segmentStartTrimMs(nextIndex) },
+    )
       .then(({ sound }) => {
         if (preloadingIndexRef.current === nextIndex) {
           nextSoundRef.current?.unloadAsync().catch(() => {});
@@ -44,16 +59,28 @@ export function useAudioPlayer() {
       });
   }, []);
 
+  const schedulePreload = useCallback((nextIndex: number) => {
+    if (preloadTimerRef.current) {
+      clearTimeout(preloadTimerRef.current);
+      preloadTimerRef.current = null;
+    }
+    // Delay a bit so decode work does not coincide with boundary handoff.
+    preloadTimerRef.current = setTimeout(() => {
+      preloadNext(nextIndex);
+      preloadTimerRef.current = null;
+    }, 250);
+  }, [preloadNext]);
+
   // ── Advance to next segment (called from status callback) ────────────────
   const advanceToNext = useCallback((completedIndex: number, segDur: number) => {
     const nextIndex = completedIndex + 1;
     const nextOffset = segmentOffsetRef.current + segDur;
-
-    soundRef.current?.unloadAsync().catch(() => {});
-    soundRef.current = null;
+    const prevSound = soundRef.current;
 
     if (!segmentUrisRef.current[nextIndex]) {
       // End of recording
+      prevSound?.unloadAsync().catch(() => {});
+      soundRef.current = null;
       nextSoundRef.current?.unloadAsync().catch(() => {});
       nextSoundRef.current = null;
       preloadingIndexRef.current = -1;
@@ -68,19 +95,22 @@ export function useAudioPlayer() {
     segmentIndexRef.current = nextIndex;
 
     if (nextSoundRef.current) {
-      // Preloaded — swap in immediately (no gap)
+      // Preloaded — start next immediately, then unload previous a bit later.
       const sound = nextSoundRef.current;
       nextSoundRef.current = null;
       preloadingIndexRef.current = -1;
       soundRef.current = sound;
       sound.setOnPlaybackStatusUpdate(makeCallbackRef.current!(nextIndex));
       sound.playAsync().catch(() => {});
-      preloadNext(nextIndex + 1);
+      prevSound?.unloadAsync().catch(() => {});
+      schedulePreload(nextIndex + 1);
     } else {
       // Fallback: load normally
+      prevSound?.unloadAsync().catch(() => {});
+      soundRef.current = null;
       loadSegmentRef.current?.(nextIndex, true);
     }
-  }, [preloadNext]);
+  }, [schedulePreload]);
 
   // ── Status callback factory ──────────────────────────────────────────────
   // advancedRef prevents double-advance if both the <50ms trigger and
@@ -89,11 +119,12 @@ export function useAudioPlayer() {
 
   makeCallbackRef.current = (segIndex: number) => (status: AVPlaybackStatus) => {
     if (!status.isLoaded) return;
-    setCurrentTime(segmentOffsetRef.current + status.positionMillis / 1000);
+    const posAdjusted = Math.max(0, status.positionMillis - segmentStartTrimMs(segIndex));
+    setCurrentTime(segmentOffsetRef.current + posAdjusted / 1000);
 
-    // Start preloading next segment when within 2 s of end
+    // Start preloading next segment when within the configured window.
     const remaining = (status.durationMillis ?? 0) - status.positionMillis;
-    if (remaining > 0 && remaining < 2000) {
+    if (remaining > 0 && remaining < PRELOAD_WINDOW_MS) {
       preloadNext(segIndex + 1);
     }
 
@@ -101,7 +132,7 @@ export function useAudioPlayer() {
     // roundtrip that would otherwise appear as silence between segments.
     if (
       remaining > 0 &&
-      remaining < 80 &&
+      remaining < EARLY_SWITCH_MS &&
       isPlayingRef.current &&
       nextSoundRef.current &&
       advancedSegRef.current !== segIndex
@@ -133,15 +164,19 @@ export function useAudioPlayer() {
 
     const { sound } = await Audio.Sound.createAsync(
       { uri },
-      { shouldPlay: autoPlay, volume: 1.0 },
+      {
+        shouldPlay: autoPlay,
+        volume: 1.0,
+        positionMillis: segmentStartTrimMs(index),
+      },
       makeCallbackRef.current!(index),
     );
     soundRef.current = sound;
     if (autoPlay) {
       setPlayerState('playing');
-      preloadNext(index + 1);
+      schedulePreload(index + 1);
     }
-  }, [preloadNext]);
+  }, [schedulePreload]);
 
   loadSegmentRef.current = loadSegment;
 
@@ -155,6 +190,11 @@ export function useAudioPlayer() {
     nextSoundRef.current?.unloadAsync().catch(() => {});
     nextSoundRef.current = null;
     preloadingIndexRef.current = -1;
+    advancedSegRef.current = -1;
+    if (preloadTimerRef.current) {
+      clearTimeout(preloadTimerRef.current);
+      preloadTimerRef.current = null;
+    }
 
     // Ensure playback mode so iOS routes to speaker/headphones (not earpiece)
     await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
@@ -178,8 +218,8 @@ export function useAudioPlayer() {
     isPlayingRef.current = true;
     await soundRef.current?.playAsync();
     setPlayerState('playing');
-    preloadNext(segmentIndexRef.current + 1);
-  }, [preloadNext]);
+    schedulePreload(segmentIndexRef.current + 1);
+  }, [schedulePreload]);
 
   const pause = useCallback(async () => {
     isPlayingRef.current = false;
@@ -208,6 +248,11 @@ export function useAudioPlayer() {
     nextSoundRef.current?.unloadAsync().catch(() => {});
     nextSoundRef.current = null;
     preloadingIndexRef.current = -1;
+    if (preloadTimerRef.current) {
+      clearTimeout(preloadTimerRef.current);
+      preloadTimerRef.current = null;
+    }
+    advancedSegRef.current = -1;
 
     if (idx !== segmentIndexRef.current) {
       segmentIndexRef.current = idx;
@@ -215,14 +260,15 @@ export function useAudioPlayer() {
       await loadSegment(idx, false);
     }
 
-    await soundRef.current?.setPositionAsync(posWithinSeg * 1000);
+    const targetMs = posWithinSeg * 1000 + segmentStartTrimMs(idx);
+    await soundRef.current?.setPositionAsync(targetMs);
     setCurrentTime(offset + posWithinSeg);
 
     if (wasPlaying) {
       await soundRef.current?.playAsync();
-      preloadNext(idx + 1);
+      schedulePreload(idx + 1);
     }
-  }, [loadSegment, preloadNext]);
+  }, [loadSegment, schedulePreload]);
 
   const unload = useCallback(async () => {
     isPlayingRef.current = false;
@@ -233,6 +279,11 @@ export function useAudioPlayer() {
     nextSoundRef.current?.unloadAsync().catch(() => {});
     nextSoundRef.current = null;
     preloadingIndexRef.current = -1;
+    advancedSegRef.current = -1;
+    if (preloadTimerRef.current) {
+      clearTimeout(preloadTimerRef.current);
+      preloadTimerRef.current = null;
+    }
     segmentUrisRef.current = [];
     segmentIndexRef.current = 0;
     segmentOffsetRef.current = 0;

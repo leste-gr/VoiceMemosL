@@ -35,9 +35,11 @@ export function useVoiceCommands(
 
     (async () => {
       await Audio.requestPermissionsAsync();
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
       while (loopRef.current && !cancelled) {
         await runChunk();
       }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
     })();
 
     return () => {
@@ -49,14 +51,12 @@ export function useVoiceCommands(
   async function runChunk() {
     let recording: Audio.Recording | null = null;
     try {
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
       const { recording: rec } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY,
       );
       recording = rec;
       await new Promise<void>((resolve) => setTimeout(resolve, CHUNK_MS));
       await recording.stopAndUnloadAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
       const uri = recording.getURI();
       if (!uri) return;
       const text = await transcribe(uri);
@@ -74,7 +74,6 @@ export function useVoiceCommands(
       console.warn('[VoiceCmd] chunk error:', e);
       if (recording) {
         try { await recording.stopAndUnloadAsync(); } catch {}
-        try { await Audio.setAudioModeAsync({ allowsRecordingIOS: false }); } catch {}
       }
       // Brief pause before retry so we don't hammer on error
       await new Promise<void>((resolve) => setTimeout(resolve, 1000));

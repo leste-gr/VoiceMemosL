@@ -1,7 +1,7 @@
-﻿import React, { useState, useCallback, useRef } from 'react';
+﻿import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  Alert, TextInput, Modal, Pressable, ListRenderItemInfo, ScrollView,
+  Alert, TextInput, Modal, Pressable, ListRenderItemInfo, ScrollView, AppState,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -98,6 +98,24 @@ export default function RecordingListScreen({ navigation }: Props) {
       setSaving(false);
     }
   }, [recorder.stop, waitForPending, getTranscript, addRecording, resetTranscript]);
+
+  // If the app goes inactive/background (e.g. lock screen), stop and save
+  // immediately to avoid leaving a corrupted in-progress segment.
+  const stopAndSaveRef = useRef(stopAndSave);
+  stopAndSaveRef.current = stopAndSave;
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (
+        (nextState === 'inactive' || nextState === 'background') &&
+        isActiveRecordingRef.current &&
+        !isSavingRef.current
+      ) {
+        stopAndSaveRef.current();
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   // Update the dispatch ref every render so pause/resume always use latest state.
   transcriptCmdRef.current = (cmd: TranscriptCmd) => {
@@ -240,27 +258,9 @@ export default function RecordingListScreen({ navigation }: Props) {
         renderItem={renderItem}
         contentContainerStyle={recordings.length === 0 ? styles.emptyContainer : styles.list}
         ListEmptyComponent={
-          <Text style={styles.emptyText}>No recordings yet.{'\n'}Tap the button below to start.</Text>
+          <Text style={styles.emptyText}>No recordings yet.{'\n'}Say "start recording" to begin.</Text>
         }
       />
-
-      {/* Record / Stop / Resume button */}
-      <TouchableOpacity
-        style={[
-          styles.recordButton,
-          recorder.state === 'recording' && styles.recordButtonActive,
-          recorder.state === 'paused' && styles.recordButtonPaused,
-        ]}
-        onPress={handleRecordPress}
-        activeOpacity={0.8}
-        disabled={saving}
-      >
-        {recorder.state === 'recording'
-          ? <View style={styles.stopShape} />
-          : recorder.state === 'paused'
-            ? <Ionicons name="play" size={28} color="#fff" />
-            : <View style={styles.startShape} />}
-      </TouchableOpacity>
 
       {/* Rename modal */}
       <Modal transparent visible={!!renameTarget} animationType="fade">
@@ -337,17 +337,6 @@ const styles = StyleSheet.create({
   rowTitle: { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },
   rowMeta: { fontSize: 12, color: '#888', marginTop: 2 },
   rowAction: { padding: 6 },
-  recordButton: {
-    position: 'absolute', bottom: 36, alignSelf: 'center',
-    width: 72, height: 72, borderRadius: 36,
-    backgroundColor: '#e53935', justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#e53935', shadowOpacity: 0.5, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
-  },
-  recordButtonActive: { backgroundColor: '#b71c1c' },
-  recordButtonPaused: { backgroundColor: '#e65100' },
-  startShape: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#fff' },
-  stopShape: { width: 24, height: 24, borderRadius: 4, backgroundColor: '#fff' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 32 },
   modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 24 },
   modalTitle: { fontSize: 17, fontWeight: '700', marginBottom: 16 },
