@@ -207,7 +207,7 @@ export default function RecordingListScreen({ navigation }: Props) {
         </View>
       )}
 
-      {/* Recording banner: timer + stop button */}}
+      {/* Recording banner: timer + stop button */}
       {isRecording && (
         <View style={styles.timerBanner}>
           <View style={styles.recDot} />
