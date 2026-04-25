@@ -6,9 +6,6 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
 import { RootStackParamList } from './types';
 
-const GROQ_API_KEY = process.env.EXPO_PUBLIC_GROQ_API_KEY ?? '';
-const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
-
 type Props = NativeStackScreenProps<RootStackParamList, 'Playback'>;
 
 export default function PlaybackScreen({ route }: Props) {
@@ -30,11 +27,10 @@ export default function PlaybackScreen({ route }: Props) {
       Alert.alert('No transcript', 'This recording has no transcript to export.');
       return;
     }
-    const noteTitle = await deriveTranscriptTitleWithGroq(recording.transcript, recording.title);
     const noteDate = new Date(recording.createdAt).toLocaleString();
     await Share.share({
-      title: noteTitle,
-      message: `${noteTitle}\n${noteDate}\n\n${recording.transcript}`,
+      title: recording.title,
+      message: `${recording.title}\n${noteDate}\n\n${recording.transcript}`,
     });
   }
 
@@ -123,102 +119,6 @@ function formatTime(s: number): string {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${sec.toString().padStart(2, '0')}`;
-}
-
-function deriveTranscriptTitle(transcript: string, fallback: string): string {
-  const cleaned = transcript
-    .replace(/\s+/g, ' ')
-    .replace(/[\u0000-\u001F]/g, ' ')
-    .trim();
-
-  if (!cleaned) return fallback;
-
-  const firstSentence = cleaned.split(/[.!?]+/)[0]?.trim() ?? '';
-  let candidate = firstSentence || cleaned.slice(0, 80);
-
-  // Trim conversational filler at the start so exported notes read better.
-  candidate = candidate.replace(
-    /^(um+|uh+|okay|ok|so|well|you know|like|hey|hi|hello|alright)\b[,:\-\s]*/i,
-    '',
-  );
-
-  candidate = candidate.trim();
-  if (!candidate) return fallback;
-
-  const MAX_TITLE = 64;
-  if (candidate.length > MAX_TITLE) {
-    const clipped = candidate.slice(0, MAX_TITLE);
-    const lastSpace = clipped.lastIndexOf(' ');
-    candidate = (lastSpace > 24 ? clipped.slice(0, lastSpace) : clipped).trim() + '...';
-  }
-
-  // Start case for cleaner note titles.
-  return candidate.charAt(0).toUpperCase() + candidate.slice(1);
-}
-
-async function deriveTranscriptTitleWithGroq(transcript: string, fallback: string): Promise<string> {
-  const local = deriveTranscriptTitle(transcript, fallback);
-  if (!GROQ_API_KEY) return local;
-
-  const compact = transcript.replace(/\s+/g, ' ').trim();
-  if (!compact) return local;
-
-  // Keep prompt payload small and deterministic.
-  const excerpt = compact.slice(0, 1800);
-
-  try {
-    const res = await fetch(GROQ_CHAT_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
-        temperature: 0.2,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Create concise note titles. Return only a plain title string, 3-8 words, no quotes, no punctuation at the end.',
-          },
-          {
-            role: 'user',
-            content: `Transcript:\n${excerpt}\n\nTitle:`,
-          },
-        ],
-      }),
-    });
-
-    if (!res.ok) return local;
-    const json = await res.json();
-    const raw: string = json?.choices?.[0]?.message?.content ?? '';
-    const ai = normalizeAiTitle(raw);
-    return ai || local;
-  } catch {
-    return local;
-  }
-}
-
-function normalizeAiTitle(raw: string): string {
-  if (!raw) return '';
-
-  let t = raw
-    .replace(/^\s*title\s*:\s*/i, '')
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/^['"`]+|['"`]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (!t) return '';
-
-  if (t.length > 64) {
-    const clipped = t.slice(0, 64);
-    const lastSpace = clipped.lastIndexOf(' ');
-    t = (lastSpace > 24 ? clipped.slice(0, lastSpace) : clipped).trim();
-  }
-
-  return t.replace(/[.!?]+$/, '').trim();
 }
 
 const styles = StyleSheet.create({

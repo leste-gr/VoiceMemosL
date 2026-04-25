@@ -7,76 +7,39 @@ import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useIsFocused } from '@react-navigation/native';
 import { useRecordingsStore } from '../store/RecordingsStore';
-import { useAudioRecorder, formatTitle } from '../hooks/useAudioRecorder';
 import { useVoiceCommands } from '../hooks/useVoiceCommands';
-import { useRecordingTranscript } from '../hooks/useRecordingTranscript';
+import { useRecordingSession } from '../hooks/useRecordingSession';
 import { Recording } from '../types/Recording';
 import { RootStackParamList } from './types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'List'>;
 
+function formatTitle(date: Date): string {
+  return date.toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
 export default function RecordingListScreen({ navigation }: Props) {
   const isFocused = useIsFocused();
   const { recordings, addRecording, deleteRecording, renameRecording } = useRecordingsStore();
-  const recorder = useAudioRecorder();
+  const session = useRecordingSession();
   const [renameTarget, setRenameTarget] = useState<Recording | null>(null);
   const [renameText, setRenameText] = useState('');
-  const [liveTranscript, setLiveTranscript] = useState('');
   const [saving, setSaving] = useState(false);
-
-  // Ref-based interlock — flipped synchronously before any await, so commands
-  // from in-flight Groq calls that arrive after stop are ignored.
-  const isActiveRecordingRef = useRef(false);
-  const isSavingRef = useRef(false);
-
-  // Keeps segment URIs collected during a recording session
-  const sessionSegmentsRef = useRef<string[]>([]);
+  const savingRef = useRef(false);
 
   // ── Transcript + command detection ─────────────────────────────────────────
   type TranscriptCmd = import('../hooks/useRecordingTranscript').TranscriptCommand;
 
-  // Stable callback — safe to pass to useRecordingTranscript without triggering
-  // re-subscriptions. Dispatches via ref so it always sees the latest handlers.
-  const transcriptCmdRef = useRef<(cmd: TranscriptCmd) => void>(() => {});
-  const handleTranscriptCommand = useCallback(
-    (cmd: TranscriptCmd) => {
-      console.log('[CMD] handleTranscriptCommand called, cmd=', cmd, 'isActive=', isActiveRecordingRef.current);
-      // Ignore commands that arrive after recording has already been stopped
-      if (!isActiveRecordingRef.current) {
-        console.log('[CMD] ignored — recording not active');
-        return;
-      }
-      transcriptCmdRef.current(cmd);
-    },
-    [],
-  );
-
-  const { processSegment, waitForPending, reset: resetTranscript, enable: enableTranscript, getTranscript } =
-    useRecordingTranscript(handleTranscriptCommand);
-
   // ── Stop + save ────────────────────────────────────────────────────────────
-  // Uses only stable refs for the guard — no dependency on React state closures.
   const stopAndSave = useCallback(async () => {
-    console.log('[StopSave] called, isActive=', isActiveRecordingRef.current, 'isSaving=', isSavingRef.current);
-    if (!isActiveRecordingRef.current || isSavingRef.current) {
-      console.log('[StopSave] guard blocked — returning early');
-      return;
-    }
-    // Flip interlocks synchronously BEFORE any await.
-    // isActiveRecordingRef=false gates handleTranscriptCommand so no new commands fire.
-    isActiveRecordingRef.current = false;
-    isSavingRef.current = true;
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
-    // NOTE: do NOT call resetTranscript() here — it would wipe both the transcript
-    // and pendingRef, so getTranscript() would return '' and waitForPending() would
-    // skip in-flight Groq calls that still need to finish before we save.
     try {
-      const { segmentUris, duration } = await recorder.stop();
-      // Wait for all in-flight Groq calls to settle (transcript still accumulates,
-      // but commands are blocked by isActiveRecordingRef=false above).
-      await waitForPending();
-      const transcript = getTranscript();
-      console.log('[StopSave] segments:', segmentUris.length, 'transcript length:', transcript.length);
+      const { segmentUris, duration, transcript } = await session.stop();
       const now = new Date();
       const recording: Recording = {
         id: now.getTime().toString(),
@@ -91,65 +54,39 @@ export default function RecordingListScreen({ navigation }: Props) {
     } catch (e) {
       console.warn('[RecordingList] stopAndSave error:', e);
     } finally {
-      resetTranscript(); // clear for next session (in finally so it always runs)
-      setLiveTranscript('');
-      sessionSegmentsRef.current = [];
-      isSavingRef.current = false;
+      savingRef.current = false;
       setSaving(false);
     }
-  }, [recorder.stop, waitForPending, getTranscript, addRecording, resetTranscript]);
+  }, [session.stop, addRecording]);
 
-  // If the app goes inactive/background (e.g. lock screen), stop and save
-  // immediately to avoid leaving a corrupted in-progress segment.
   const stopAndSaveRef = useRef(stopAndSave);
   stopAndSaveRef.current = stopAndSave;
 
+  // Auto-save if app goes background while recording.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
       if (
         (nextState === 'inactive' || nextState === 'background') &&
-        isActiveRecordingRef.current &&
-        !isSavingRef.current
+        session.state === 'recording' &&
+        !savingRef.current
       ) {
         stopAndSaveRef.current();
       }
     });
     return () => sub.remove();
-  }, []);
+  }, [session.state]);
 
-  // Update the dispatch ref every render so pause/resume always use latest state.
-  transcriptCmdRef.current = (cmd: TranscriptCmd) => {
-    console.log('[CMD] transcriptCmdRef dispatching:', cmd);
-    if (cmd === 'stopRecording') {
-      stopAndSave();
-    }
-  };
+  // ── Start recording (voice command trigger) ────────────────────────────────
+  const handleStart = useCallback(() => {
+    if (session.state !== 'idle' || savingRef.current) return;
+    session.start(() => stopAndSaveRef.current());
+  }, [session.state, session.start]);
 
-  // ── Segment callback (called by recorder every ~5 s) ──────────────────────
-  const handleSegment = useCallback(
-    (uri: string, _segDuration: number) => {
-      processSegment(uri).then((full) => setLiveTranscript(full));
-    },
-    [processSegment],
-  );
-
-  // ── Idle voice command (start recording) ─────────────────────────────────
+  // ── Idle voice command listener ────────────────────────────────────────────
   useVoiceCommands(
-    useCallback(() => { handleRecordPress(); }, []),
-    isFocused && recorder.state === 'idle' && !saving,
+    handleStart,
+    isFocused && session.state === 'idle' && !saving,
   );
-
-  // ── Record button ──────────────────────────────────────────────────────────
-  async function handleRecordPress() {
-    if (recorder.state === 'idle' && !isSavingRef.current) {
-      sessionSegmentsRef.current = [];
-      isActiveRecordingRef.current = true;
-      enableTranscript();
-      await recorder.start(handleSegment);
-    } else if (isActiveRecordingRef.current) {
-      await stopAndSave();
-    }
-  }
 
   // ── Row actions ────────────────────────────────────────────────────────────
   function confirmDelete(recording: Recording) {
@@ -196,8 +133,7 @@ export default function RecordingListScreen({ navigation }: Props) {
     );
   }
 
-  const isRecording = recorder.state !== 'idle';
-
+  const isRecording = session.state === 'recording';
   const buildNumber = process.env.EXPO_PUBLIC_BUILD_NUMBER;
   const versionLabel = buildNumber ? `v1.0 (build ${buildNumber})` : 'dev';
 
@@ -208,17 +144,20 @@ export default function RecordingListScreen({ navigation }: Props) {
         <View style={styles.voiceBanner}>
           <Ionicons name="volume-medium-outline" size={14} color="#555" />
           <Text style={styles.voiceBannerText}>
-            Listening · say "record" or "start recording"
+            Listening · say "start recording"
           </Text>
           <Text style={styles.versionText}>{versionLabel}</Text>
         </View>
       )}
 
-      {/* Recording timer */}
+      {/* Recording banner: timer + stop button */}
       {isRecording && (
         <View style={styles.timerBanner}>
           <View style={styles.recDot} />
-          <Text style={styles.timerText}>{formatDuration(recorder.elapsed)}</Text>
+          <Text style={styles.timerText}>{formatDuration(session.elapsed)}</Text>
+          <TouchableOpacity onPress={stopAndSave} style={styles.stopBtn} disabled={saving}>
+            <View style={styles.stopShape} />
+          </TouchableOpacity>
         </View>
       )}
 
@@ -230,7 +169,7 @@ export default function RecordingListScreen({ navigation }: Props) {
           </Text>
           <ScrollView style={styles.transcriptScroll}>
             <Text style={styles.transcriptText}>
-              {liveTranscript || 'Transcribing…'}
+              {session.liveTranscript || 'Transcribing…'}
             </Text>
           </ScrollView>
         </View>
@@ -302,6 +241,8 @@ const styles = StyleSheet.create({
   },
   recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' },
   timerText: { color: '#fff', fontVariant: ['tabular-nums'], fontSize: 16, flex: 1 },
+  stopBtn: { padding: 6 },
+  stopShape: { width: 22, height: 22, borderRadius: 4, backgroundColor: '#fff' },
   transcriptBox: {
     backgroundColor: '#fff', borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#ddd',
     paddingHorizontal: 14, paddingTop: 8, paddingBottom: 6, maxHeight: 100,

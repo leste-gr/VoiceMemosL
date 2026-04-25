@@ -24,8 +24,7 @@ jobs:
 
       - name: Write .env
         run: |
-          echo "EXPO_PUBLIC_GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" > .env
-          echo "EXPO_PUBLIC_BUILD_NUMBER=${{ github.run_number }}" >> .env
+          echo "EXPO_PUBLIC_BUILD_NUMBER=${{ github.run_number }}" > .env
 
       - name: Prebuild iOS project
         run: npx expo prebuild --platform ios --clean

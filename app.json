@@ -34,6 +34,13 @@
     "plugins": [
       "expo-av",
       [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow Voice Memos to use the microphone.",
+          "speechRecognitionPermission": "Allow Voice Memos to use speech recognition for transcription and voice commands."
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "ios": {
