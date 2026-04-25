@@ -33,6 +33,11 @@ export default function RecordingListScreen({ navigation }: Props) {
   const [renameText, setRenameText] = useState('');
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const [debugLog, setDebugLog] = useState<{ text: string; status: string; ts: number }[]>([]);
+
+  const addDebug = useCallback((text: string, status: string) => {
+    setDebugLog((prev) => [{ text, status, ts: Date.now() }, ...prev].slice(0, 20));
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem(LANGUAGE_KEY)
@@ -109,6 +114,7 @@ export default function RecordingListScreen({ navigation }: Props) {
     isFocused && session.state === 'idle' && !saving,
     speechLocale,
     handleLanguageCommand,
+    addDebug,
   );
 
   // ── Row actions ────────────────────────────────────────────────────────────
@@ -188,7 +194,20 @@ export default function RecordingListScreen({ navigation }: Props) {
         </View>
       )}
 
-      {/* Recording banner: timer + stop button */}
+      {/* Debug panel — shows raw STT output while idle */}
+      {!isRecording && debugLog.length > 0 && (
+        <View style={styles.debugPanel}>
+          <Text style={styles.debugTitle}>🛠 STT debug log</Text>
+          {debugLog.map((entry) => (
+            <Text key={entry.ts} style={styles.debugEntry} numberOfLines={1}>
+              <Text style={styles.debugStatus}>[{entry.status}]</Text>
+              {entry.text ? ` ${entry.text}` : ''}
+            </Text>
+          ))}
+        </View>
+      )}
+
+      {/* Recording banner: timer + stop button */}}
       {isRecording && (
         <View style={styles.timerBanner}>
           <View style={styles.recDot} />
@@ -298,6 +317,13 @@ const styles = StyleSheet.create({
   recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' },
   timerText: { color: '#fff', fontVariant: ['tabular-nums'], fontSize: 16, flex: 1 },
   stopBtn: { padding: 6 },
+  debugPanel: {
+    backgroundColor: '#1a1a2e', paddingHorizontal: 12, paddingVertical: 8,
+    maxHeight: 140,
+  },
+  debugTitle: { color: '#aaa', fontSize: 10, marginBottom: 4, fontWeight: '600' },
+  debugEntry: { color: '#eee', fontSize: 11, lineHeight: 17 },
+  debugStatus: { color: '#4fc3f7', fontWeight: '700' },
   stopShape: { width: 22, height: 22, borderRadius: 4, backgroundColor: '#fff' },
   transcriptBox: {
     backgroundColor: '#fff', borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#ddd',

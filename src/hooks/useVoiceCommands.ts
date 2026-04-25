@@ -16,6 +16,7 @@ export function useVoiceCommands(
   active: boolean,
   locale: SpeechLocale = 'en-US',
   onLanguageCommand?: (nextLocale: SpeechLocale) => void,
+  onDebugText?: (text: string, status: string) => void,
 ) {
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -23,6 +24,8 @@ export function useVoiceCommands(
   onStartRef.current = onStartCommand;
   const onLanguageRef = useRef(onLanguageCommand);
   onLanguageRef.current = onLanguageCommand;
+  const onDebugRef = useRef(onDebugText);
+  onDebugRef.current = onDebugText;
 
   useEffect(() => {
     if (!active) return;
@@ -35,6 +38,7 @@ export function useVoiceCommands(
       ExpoSpeechRecognitionModule.addListener('result', (event) => {
         if (triggered || cancelled) return;
         const text = (event.results[0]?.transcript ?? '').toLowerCase().trim();
+        onDebugRef.current?.(text, 'result');
 
         const requestedLanguage = getLanguageCommand(text);
         if (requestedLanguage) {
@@ -44,9 +48,22 @@ export function useVoiceCommands(
 
         if (isStartCommand(text, locale)) {
           triggered = true;
+          onDebugRef.current?.(text, 'matched-start');
           ExpoSpeechRecognitionModule.abort();
           onStartRef.current();
         }
+      }),
+    );
+
+    subs.push(
+      ExpoSpeechRecognitionModule.addListener('error', (event) => {
+        onDebugRef.current?.('', `error:${event.error}`);
+      }),
+    );
+
+    subs.push(
+      ExpoSpeechRecognitionModule.addListener('start', () => {
+        onDebugRef.current?.('', 'listening');
       }),
     );
 
@@ -79,7 +96,7 @@ export function useVoiceCommands(
       subs.forEach((s) => s.remove());
       ExpoSpeechRecognitionModule.abort();
     };
-  }, [active, locale]);
+  }, [active, locale]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 function normalize(text: string): string {
