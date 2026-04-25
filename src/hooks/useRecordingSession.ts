@@ -84,9 +84,8 @@ export function useRecordingSession(transcriptLang: SpeechLocale = 'el-GR') {
       lang: transcriptLang,
       interimResults: true,
       continuous: true,
-      // false = allows Apple/Google network STT for better accuracy & language coverage.
-      // Set true to force fully on-device (requires model to be installed).
-      requiresOnDeviceRecognition: false,
+      // Match useVoiceCommands: use on-device only to avoid network STT issues
+      requiresOnDeviceRecognition: true,
       addsPunctuation: true,
       iosTaskHint: 'dictation',
       recordingOptions: { persist: true },
