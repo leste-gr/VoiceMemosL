@@ -2,7 +2,7 @@ name: Build iOS IPA
 
 on:
   push:
-    branches: [master]
+    branches: [master, feature/on-device-speech]
   workflow_dispatch:
 
 jobs:
