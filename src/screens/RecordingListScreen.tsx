@@ -3,16 +3,19 @@ import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   Alert, TextInput, Modal, Pressable, ListRenderItemInfo, ScrollView, AppState,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useIsFocused } from '@react-navigation/native';
 import { useRecordingsStore } from '../store/RecordingsStore';
 import { useVoiceCommands } from '../hooks/useVoiceCommands';
+import type { SpeechLocale } from '../hooks/useVoiceCommands';
 import { useRecordingSession } from '../hooks/useRecordingSession';
 import { Recording } from '../types/Recording';
 import { RootStackParamList } from './types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'List'>;
+const LANGUAGE_KEY = '@voice_memos_language';
 
 function formatTitle(date: Date): string {
   return date.toLocaleDateString(undefined, {
@@ -24,14 +27,27 @@ function formatTitle(date: Date): string {
 export default function RecordingListScreen({ navigation }: Props) {
   const isFocused = useIsFocused();
   const { recordings, addRecording, deleteRecording, renameRecording } = useRecordingsStore();
-  const session = useRecordingSession();
+  const [speechLocale, setSpeechLocale] = useState<SpeechLocale>('el-GR');
+  const session = useRecordingSession(speechLocale);
   const [renameTarget, setRenameTarget] = useState<Recording | null>(null);
   const [renameText, setRenameText] = useState('');
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
 
-  // ── Transcript + command detection ─────────────────────────────────────────
-  type TranscriptCmd = import('../hooks/useRecordingTranscript').TranscriptCommand;
+  useEffect(() => {
+    AsyncStorage.getItem(LANGUAGE_KEY)
+      .then((value) => {
+        if (value === 'en-US' || value === 'el-GR') {
+          setSpeechLocale(value);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const selectLanguage = useCallback((locale: SpeechLocale) => {
+    setSpeechLocale(locale);
+    AsyncStorage.setItem(LANGUAGE_KEY, locale).catch(() => {});
+  }, []);
 
   // ── Stop + save ────────────────────────────────────────────────────────────
   const stopAndSave = useCallback(async () => {
@@ -86,6 +102,7 @@ export default function RecordingListScreen({ navigation }: Props) {
   useVoiceCommands(
     handleStart,
     isFocused && session.state === 'idle' && !saving,
+    speechLocale,
   );
 
   // ── Row actions ────────────────────────────────────────────────────────────
@@ -134,6 +151,7 @@ export default function RecordingListScreen({ navigation }: Props) {
   }
 
   const isRecording = session.state === 'recording';
+  const languageLabel = speechLocale === 'el-GR' ? 'Greek' : 'English';
   const buildNumber = process.env.EXPO_PUBLIC_BUILD_NUMBER;
   const versionLabel = buildNumber ? `v1.0 (build ${buildNumber})` : 'dev';
 
@@ -144,8 +162,22 @@ export default function RecordingListScreen({ navigation }: Props) {
         <View style={styles.voiceBanner}>
           <Ionicons name="volume-medium-outline" size={14} color="#555" />
           <Text style={styles.voiceBannerText}>
-            Listening · say "start recording"
+            Listening ({languageLabel})
           </Text>
+          <View style={styles.langSwitch}>
+            <TouchableOpacity
+              style={[styles.langBtn, speechLocale === 'en-US' && styles.langBtnActive]}
+              onPress={() => selectLanguage('en-US')}
+            >
+              <Text style={[styles.langText, speechLocale === 'en-US' && styles.langTextActive]}>EN</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.langBtn, speechLocale === 'el-GR' && styles.langBtnActive]}
+              onPress={() => selectLanguage('el-GR')}
+            >
+              <Text style={[styles.langText, speechLocale === 'el-GR' && styles.langTextActive]}>EL</Text>
+            </TouchableOpacity>
+          </View>
           <Text style={styles.versionText}>{versionLabel}</Text>
         </View>
       )}
@@ -188,7 +220,7 @@ export default function RecordingListScreen({ navigation }: Props) {
         renderItem={renderItem}
         contentContainerStyle={recordings.length === 0 ? styles.emptyContainer : styles.list}
         ListEmptyComponent={
-          <Text style={styles.emptyText}>No recordings yet.{'\n'}Say "start recording" to begin.</Text>
+          <Text style={styles.emptyText}>No recordings yet.{"\n"}Say the start command in your selected language.</Text>
         }
       />
 
@@ -234,6 +266,24 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#ddd',
   },
   voiceBannerText: { fontSize: 11, color: '#555', flex: 1 },
+  langSwitch: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#ddd',
+    marginRight: 8,
+  },
+  langBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  langBtnActive: {
+    backgroundColor: '#1573ff',
+    borderRadius: 8,
+  },
+  langText: { fontSize: 11, color: '#666', fontWeight: '600' },
+  langTextActive: { color: '#fff' },
   versionText: { fontSize: 10, color: '#aaa' },
   timerBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,

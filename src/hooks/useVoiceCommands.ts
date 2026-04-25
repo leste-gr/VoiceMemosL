@@ -1,6 +1,8 @@
 ﻿import { useEffect, useRef } from 'react';
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 
+export type SpeechLocale = 'en-US' | 'el-GR';
+
 /**
  * Continuously listens for a "start recording" voice command using the
  * device's on-device speech recognizer (iOS SFSpeechRecognizer /
@@ -12,6 +14,7 @@ import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 export function useVoiceCommands(
   onStartCommand: () => void,
   active: boolean,
+  locale: SpeechLocale = 'en-US',
 ) {
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -29,7 +32,7 @@ export function useVoiceCommands(
       ExpoSpeechRecognitionModule.addListener('result', (event) => {
         if (triggered || cancelled) return;
         const text = (event.results[0]?.transcript ?? '').toLowerCase().trim();
-        if (isStartCommand(text)) {
+        if (isStartCommand(text, locale)) {
           triggered = true;
           ExpoSpeechRecognitionModule.abort();
           onStartRef.current();
@@ -49,7 +52,7 @@ export function useVoiceCommands(
 
     function tryStart() {
       ExpoSpeechRecognitionModule.start({
-        lang: 'en-US',
+        lang: locale,
         interimResults: false,
         continuous: false,
         requiresOnDeviceRecognition: true,
@@ -66,11 +69,17 @@ export function useVoiceCommands(
       subs.forEach((s) => s.remove());
       ExpoSpeechRecognitionModule.abort();
     };
-  }, [active]);
+  }, [active, locale]);
 }
 
 function normalize(text: string): string {
-  return text.replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^\p{L}\p{N} ]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function hasPhrase(text: string, phrases: string[]): boolean {
@@ -83,9 +92,17 @@ function hasPhrase(text: string, phrases: string[]): boolean {
   });
 }
 
-function isStartCommand(raw: string): boolean {
+function isStartCommand(raw: string, locale: SpeechLocale = 'en-US'): boolean {
   const text = normalize(raw);
   if (text.split(' ').length > 6) return false;
+  if (locale === 'el-GR') {
+    return (
+      text === 'εγγραφη' ||
+      text === 'εναρξη' ||
+      hasPhrase(text, ['ξεκινα εγγραφη', 'ξεκινα την εγγραφη', 'εναρξη εγγραφης'])
+    );
+  }
+
   return (
     text === 'record' ||
     text === 'start' ||

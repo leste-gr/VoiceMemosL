@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
+import type { SpeechLocale } from './useVoiceCommands';
 
 export type RecordingSessionState = 'idle' | 'recording';
 
@@ -25,12 +26,7 @@ export interface RecordingSessionResult {
  * network STT for better accuracy on low-end devices.
  */
 
-// ── Language config ──────────────────────────────────────────────────────────
-// Primary transcription locale. The OS will use this for STT.
-// "el-GR" = Modern Greek, "en-US" = English, etc.
-const TRANSCRIPT_LANG = 'el-GR';
-
-export function useRecordingSession() {
+export function useRecordingSession(transcriptLang: SpeechLocale = 'el-GR') {
   const [state, setState] = useState<RecordingSessionState>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [liveTranscript, setLiveTranscript] = useState('');
@@ -85,7 +81,7 @@ export function useRecordingSession() {
 
   const startInnerSession = useCallback(() => {
     ExpoSpeechRecognitionModule.start({
-      lang: TRANSCRIPT_LANG,
+      lang: transcriptLang,
       interimResults: true,
       continuous: true,
       // false = allows Apple/Google network STT for better accuracy & language coverage.
@@ -95,7 +91,7 @@ export function useRecordingSession() {
       iosTaskHint: 'dictation',
       recordingOptions: { persist: true },
     });
-  }, []);
+  }, [transcriptLang]);
 
   // ── Public API ───────────────────────────────────────────────────────────
 
