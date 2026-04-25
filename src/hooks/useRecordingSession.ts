@@ -102,6 +102,9 @@ export function useRecordingSession(transcriptLang: SpeechLocale = 'el-GR') {
   const start = useCallback((onStopCommand?: () => void) => {
     if (stateRef.current !== 'idle') return;
 
+    // Ensure any idle listener is fully aborted before starting recording
+    ExpoSpeechRecognitionModule.abort();
+
     stateRef.current = 'recording';
     committedRef.current = '';
     segmentUrisRef.current = [];
