@@ -49,6 +49,11 @@ export default function RecordingListScreen({ navigation }: Props) {
     AsyncStorage.setItem(LANGUAGE_KEY, locale).catch(() => {});
   }, []);
 
+  const handleLanguageCommand = useCallback((nextLocale: SpeechLocale) => {
+    if (savingRef.current || session.state !== 'idle') return;
+    selectLanguage(nextLocale);
+  }, [session.state, selectLanguage]);
+
   // ── Stop + save ────────────────────────────────────────────────────────────
   const stopAndSave = useCallback(async () => {
     if (savingRef.current) return;
@@ -103,6 +108,7 @@ export default function RecordingListScreen({ navigation }: Props) {
     handleStart,
     isFocused && session.state === 'idle' && !saving,
     speechLocale,
+    handleLanguageCommand,
   );
 
   // ── Row actions ────────────────────────────────────────────────────────────
@@ -162,7 +168,7 @@ export default function RecordingListScreen({ navigation }: Props) {
         <View style={styles.voiceBanner}>
           <Ionicons name="volume-medium-outline" size={14} color="#555" />
           <Text style={styles.voiceBannerText}>
-            Listening ({languageLabel})
+            Listening ({languageLabel}) • say "English" or "Greek"
           </Text>
           <View style={styles.langSwitch}>
             <TouchableOpacity

@@ -15,11 +15,14 @@ export function useVoiceCommands(
   onStartCommand: () => void,
   active: boolean,
   locale: SpeechLocale = 'en-US',
+  onLanguageCommand?: (nextLocale: SpeechLocale) => void,
 ) {
   const activeRef = useRef(active);
   activeRef.current = active;
   const onStartRef = useRef(onStartCommand);
   onStartRef.current = onStartCommand;
+  const onLanguageRef = useRef(onLanguageCommand);
+  onLanguageRef.current = onLanguageCommand;
 
   useEffect(() => {
     if (!active) return;
@@ -32,6 +35,13 @@ export function useVoiceCommands(
       ExpoSpeechRecognitionModule.addListener('result', (event) => {
         if (triggered || cancelled) return;
         const text = (event.results[0]?.transcript ?? '').toLowerCase().trim();
+
+        const requestedLanguage = getLanguageCommand(text);
+        if (requestedLanguage) {
+          onLanguageRef.current?.(requestedLanguage);
+          return;
+        }
+
         if (isStartCommand(text, locale)) {
           triggered = true;
           ExpoSpeechRecognitionModule.abort();
@@ -108,4 +118,32 @@ function isStartCommand(raw: string, locale: SpeechLocale = 'en-US'): boolean {
     text === 'start' ||
     hasPhrase(text, ['start recording', 'start a recording', 'begin recording', 'new recording'])
   );
+}
+
+function getLanguageCommand(raw: string): SpeechLocale | null {
+  const text = normalize(raw);
+
+  const englishPhrases = [
+    'english',
+    'switch to english',
+    'set language to english',
+    'speak english',
+    'αγγλικα',
+    'βαλε αγγλικα',
+    'γλωσσα αγγλικα',
+  ];
+
+  const greekPhrases = [
+    'greek',
+    'switch to greek',
+    'set language to greek',
+    'speak greek',
+    'ελληνικα',
+    'βαλε ελληνικα',
+    'γλωσσα ελληνικα',
+  ];
+
+  if (text === 'english' || hasPhrase(text, englishPhrases)) return 'en-US';
+  if (text === 'greek' || hasPhrase(text, greekPhrases)) return 'el-GR';
+  return null;
 }
