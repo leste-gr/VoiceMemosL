@@ -198,6 +198,9 @@ export default function RecordingListScreen({ navigation }: Props) {
 
   const isRecording = recorder.state !== 'idle';
 
+  const buildNumber = process.env.EXPO_PUBLIC_BUILD_NUMBER;
+  const versionLabel = buildNumber ? `v1.0 (build ${buildNumber})` : 'dev';
+
   return (
     <View style={styles.container}>
       {/* Voice-command status banner (idle only) */}
@@ -207,6 +210,7 @@ export default function RecordingListScreen({ navigation }: Props) {
           <Text style={styles.voiceBannerText}>
             Listening · say "record" or "start recording"
           </Text>
+          <Text style={styles.versionText}>{versionLabel}</Text>
         </View>
       )}
 
@@ -290,7 +294,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fffde7', paddingHorizontal: 16, paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#ddd',
   },
-  voiceBannerText: { fontSize: 11, color: '#555' },
+  voiceBannerText: { fontSize: 11, color: '#555', flex: 1 },
+  versionText: { fontSize: 10, color: '#aaa' },
   timerBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: '#e53935', paddingHorizontal: 20, paddingVertical: 10,
