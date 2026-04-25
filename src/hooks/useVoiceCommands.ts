@@ -62,6 +62,13 @@ export function useVoiceCommands(
     subs.push(
       ExpoSpeechRecognitionModule.addListener('error', (event) => {
         onDebugRef.current?.('', `error:${event.error}`);
+        // On no-speech error, abort and restart to recover
+        if (event.error === 'no-speech' && !triggered && !cancelled) {
+          ExpoSpeechRecognitionModule.abort();
+          setTimeout(() => {
+            if (!triggered && !cancelled && activeRef.current) tryStart();
+          }, 500);
+        }
       }),
     );
 
