@@ -8,7 +8,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useIsFocused } from '@react-navigation/native';
 import { useRecordingsStore } from '../store/RecordingsStore';
 import { useAudioRecorder, formatTitle } from '../hooks/useAudioRecorder';
-import { useVoiceCommands, IdleEngine } from '../hooks/useVoiceCommands';
+import { useVoiceCommands } from '../hooks/useVoiceCommands';
 import { useRecordingTranscript } from '../hooks/useRecordingTranscript';
 import { Recording } from '../types/Recording';
 import { RootStackParamList } from './types';
@@ -156,7 +156,7 @@ export default function RecordingListScreen({ navigation }: Props) {
   }, [recordings]);
 
   // ── Idle voice command (start recording) ─────────────────────────────────
-  const { idleEngine } = useVoiceCommands(
+  useVoiceCommands(
     useCallback(() => { handleRecordPress(); }, []),
     isFocused && recorder.state === 'idle' && !saving,
     handleExportLatestToNote,
@@ -237,11 +237,6 @@ export default function RecordingListScreen({ navigation }: Props) {
             Listening · say "record" or "export recording"
           </Text>
           <View style={styles.voiceBannerRight}>
-            <View style={[styles.engineBadge, idleEngine === 'vosk' ? styles.engineBadgeLocal : styles.engineBadgeCloud]}>
-              <Text style={styles.engineBadgeText}>
-                {idleEngine === 'vosk' ? '⚡ local' : idleEngine === 'groq' ? '☁ groq' : '…'}
-              </Text>
-            </View>
             <Text style={styles.versionText}>{versionLabel}</Text>
           </View>
         </View>
@@ -330,10 +325,6 @@ const styles = StyleSheet.create({
   },
   voiceBannerText: { fontSize: 11, color: '#555', flex: 1 },
   voiceBannerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  engineBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
-  engineBadgeLocal: { backgroundColor: '#e8f5e9' },
-  engineBadgeCloud: { backgroundColor: '#e3f2fd' },
-  engineBadgeText: { fontSize: 9, fontWeight: '600', color: '#555' },
   versionText: { fontSize: 10, color: '#aaa' },
   timerBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
