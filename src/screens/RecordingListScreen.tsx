@@ -1,14 +1,14 @@
 ﻿import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  Alert, TextInput, Modal, Pressable, ListRenderItemInfo, ScrollView, AppState,
+  Alert, TextInput, Modal, Pressable, ListRenderItemInfo, ScrollView, AppState, Share,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useIsFocused } from '@react-navigation/native';
 import { useRecordingsStore } from '../store/RecordingsStore';
 import { useAudioRecorder, formatTitle } from '../hooks/useAudioRecorder';
-import { useVoiceCommands } from '../hooks/useVoiceCommands';
+import { useVoiceCommands, IdleEngine } from '../hooks/useVoiceCommands';
 import { useRecordingTranscript } from '../hooks/useRecordingTranscript';
 import { Recording } from '../types/Recording';
 import { RootStackParamList } from './types';
@@ -133,10 +133,33 @@ export default function RecordingListScreen({ navigation }: Props) {
     [processSegment],
   );
 
+  const handleExportLatestToNote = useCallback(async () => {
+    const latest = recordings[0];
+    if (!latest) {
+      Alert.alert('No recordings', 'There is no recording to export yet.');
+      return;
+    }
+
+    try {
+      const details = latest.transcript
+        ? `Transcript: ${latest.transcript}`
+        : 'Transcript: (none)';
+      await Share.share({
+        title: `Voice Memo - ${latest.title}`,
+        message: `${latest.title}\n${details}`,
+        url: latest.fileUri,
+      });
+    } catch (e) {
+      console.warn('[RecordingList] export latest recording failed:', e);
+      Alert.alert('Export failed', 'Could not export the latest recording. Please try again.');
+    }
+  }, [recordings]);
+
   // ── Idle voice command (start recording) ─────────────────────────────────
-  useVoiceCommands(
+  const { idleEngine } = useVoiceCommands(
     useCallback(() => { handleRecordPress(); }, []),
     isFocused && recorder.state === 'idle' && !saving,
+    handleExportLatestToNote,
   );
 
   // ── Record button ──────────────────────────────────────────────────────────
@@ -200,17 +223,27 @@ export default function RecordingListScreen({ navigation }: Props) {
 
   const buildNumber = process.env.EXPO_PUBLIC_BUILD_NUMBER;
   const versionLabel = buildNumber ? `v1.0 (build ${buildNumber})` : 'dev';
+  const containerStyle = isRecording
+    ? [styles.container, styles.containerRecording]
+    : styles.container;
 
   return (
-    <View style={styles.container}>
+    <View style={containerStyle}>
       {/* Voice-command status banner (idle only) */}
       {!isRecording && !saving && (
         <View style={styles.voiceBanner}>
           <Ionicons name="volume-medium-outline" size={14} color="#555" />
           <Text style={styles.voiceBannerText}>
-            Listening · say "record" or "start recording"
+            Listening · say "record" or "export recording"
           </Text>
-          <Text style={styles.versionText}>{versionLabel}</Text>
+          <View style={styles.voiceBannerRight}>
+            <View style={[styles.engineBadge, idleEngine === 'vosk' ? styles.engineBadgeLocal : styles.engineBadgeCloud]}>
+              <Text style={styles.engineBadgeText}>
+                {idleEngine === 'vosk' ? '⚡ local' : idleEngine === 'groq' ? '☁ groq' : '…'}
+              </Text>
+            </View>
+            <Text style={styles.versionText}>{versionLabel}</Text>
+          </View>
         </View>
       )}
 
@@ -289,12 +322,18 @@ function formatDuration(seconds: number): string {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
+  containerRecording: { backgroundColor: '#ffb3b0' },
   voiceBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: '#fffde7', paddingHorizontal: 16, paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#ddd',
   },
   voiceBannerText: { fontSize: 11, color: '#555', flex: 1 },
+  voiceBannerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  engineBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
+  engineBadgeLocal: { backgroundColor: '#e8f5e9' },
+  engineBadgeCloud: { backgroundColor: '#e3f2fd' },
+  engineBadgeText: { fontSize: 9, fontWeight: '600', color: '#555' },
   versionText: { fontSize: 10, color: '#aaa' },
   timerBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,

@@ -40,6 +40,15 @@
             "deploymentTarget": "16.0"
           }
         }
+      ],
+      [
+        "react-native-vosk",
+        {
+          "models": [
+            "assets/model-en-us"
+          ],
+          "iOSMicrophonePermission": "Voice Memos needs microphone access for offline voice commands."
+        }
       ]
     ],
     "extra": {
