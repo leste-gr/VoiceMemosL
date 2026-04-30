@@ -1,15 +1,18 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Recording } from '../types/Recording';
 
 const STORAGE_KEY = '@voice_memos_recordings';
+const DRAFT_STORAGE_KEY = '@voice_memos_recording_draft';
 const RECORDINGS_DIR = FileSystem.documentDirectory + 'recordings/';
 
 interface RecordingsStore {
   recordings: Recording[];
-  newFileUri: () => string;
+  materializeSegment: (sourceUri: string, recordingId: string, segmentIndex: number) => Promise<string>;
   addRecording: (recording: Recording) => Promise<void>;
+  saveDraftRecording: (recording: Recording) => Promise<void>;
+  clearDraftRecording: () => Promise<void>;
   deleteRecording: (id: string) => Promise<void>;
   renameRecording: (id: string, newTitle: string) => Promise<void>;
 }
@@ -19,52 +22,66 @@ const RecordingsContext = createContext<RecordingsStore | null>(null);
 export function RecordingsProvider({ children }: { children: React.ReactNode }) {
   const [recordings, setRecordings] = useState<Recording[]>([]);
 
+  const ensureRecordingsDir = useCallback(async () => {
+    const info = await FileSystem.getInfoAsync(RECORDINGS_DIR);
+    if (!info.exists) {
+      await FileSystem.makeDirectoryAsync(RECORDINGS_DIR, { intermediates: true });
+    }
+  }, []);
+
+  const sanitizeRecording = useCallback(async (recording: Recording): Promise<Recording | null> => {
+    try {
+      const uris = recording.segmentUris?.length ? recording.segmentUris : [recording.fileUri];
+      const existing: string[] = [];
+      for (const uri of uris) {
+        if (!uri) continue;
+        const info = await FileSystem.getInfoAsync(uri);
+        if (info.exists) existing.push(uri);
+      }
+      if (!existing.length) return null;
+
+      return {
+        ...recording,
+        fileUri: existing[0],
+        segmentUris: existing,
+      };
+    } catch {
+      return null;
+    }
+  }, []);
+
   // Ensure recordings directory exists and load saved data
   useEffect(() => {
     async function init() {
-      const info = await FileSystem.getInfoAsync(RECORDINGS_DIR);
-      if (!info.exists) {
-        await FileSystem.makeDirectoryAsync(RECORDINGS_DIR, { intermediates: true });
-      }
+      await ensureRecordingsDir();
       await load();
     }
     init();
-  }, []);
+  }, [ensureRecordingsDir]);
 
   async function load() {
     try {
       const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const saved: Recording[] = JSON.parse(raw);
-      // Validate each record independently so one bad/corrupt entry does not
-      // drop the whole list. Also validate segment-based recordings.
+      const saved: Recording[] = raw ? JSON.parse(raw) : [];
       const checked = await Promise.all(
-        saved.map(async (r): Promise<Recording | null> => {
-          try {
-            const uris = r.segmentUris?.length ? r.segmentUris : [r.fileUri];
-            const existing: string[] = [];
-            for (const uri of uris) {
-              if (!uri) continue;
-              const info = await FileSystem.getInfoAsync(uri);
-              if (info.exists) existing.push(uri);
-            }
-            if (!existing.length) return null;
-
-            return {
-              ...r,
-              fileUri: existing[0],
-              segmentUris: existing,
-            };
-          } catch {
-            return null;
-          }
-        })
+        saved.map((recording) => sanitizeRecording(recording))
       );
 
       const valid = checked.filter((r): r is Recording => r !== null);
-      // Persist sanitized list so removed/corrupt records do not reappear.
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
-      setRecordings(valid);
+      const rawDraft = await AsyncStorage.getItem(DRAFT_STORAGE_KEY);
+      const draft = rawDraft ? await sanitizeRecording(JSON.parse(rawDraft) as Recording) : null;
+      const next = draft
+        ? [
+            { ...draft, title: draft.title.startsWith('Recovered ') ? draft.title : `Recovered ${draft.title}` },
+            ...valid.filter((recording) => recording.id !== draft.id),
+          ]
+        : valid;
+
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      if (draft) {
+        await AsyncStorage.removeItem(DRAFT_STORAGE_KEY);
+      }
+      setRecordings(next);
     } catch {}
   }
 
@@ -73,42 +90,75 @@ export function RecordingsProvider({ children }: { children: React.ReactNode }) 
     setRecordings(next);
   }
 
-  function newFileUri(): string {
-    return RECORDINGS_DIR + `${Date.now()}.m4a`;
-  }
+  const materializeSegment = useCallback(async (sourceUri: string, recordingId: string, segmentIndex: number) => {
+    await ensureRecordingsDir();
+    const destinationUri = `${RECORDINGS_DIR}${recordingId}-${segmentIndex}.m4a`;
+
+    if (sourceUri === destinationUri) {
+      return destinationUri;
+    }
+
+    const existing = await FileSystem.getInfoAsync(destinationUri);
+    if (existing.exists) {
+      await FileSystem.deleteAsync(destinationUri, { idempotent: true });
+    }
+
+    await FileSystem.copyAsync({ from: sourceUri, to: destinationUri });
+    await FileSystem.deleteAsync(sourceUri, { idempotent: true }).catch(() => {});
+    return destinationUri;
+  }, [ensureRecordingsDir]);
 
   const addRecording = useCallback(async (recording: Recording) => {
+    let next: Recording[] = [];
     setRecordings((prev) => {
-      const next = [recording, ...prev];
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      next = [recording, ...prev.filter((item) => item.id !== recording.id)];
       return next;
     });
+    await AsyncStorage.removeItem(DRAFT_STORAGE_KEY);
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  }, []);
+
+  const saveDraftRecording = useCallback(async (recording: Recording) => {
+    await AsyncStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(recording));
+  }, []);
+
+  const clearDraftRecording = useCallback(async () => {
+    await AsyncStorage.removeItem(DRAFT_STORAGE_KEY);
   }, []);
 
   const deleteRecording = useCallback(async (id: string) => {
+    let next: Recording[] = [];
     setRecordings((prev) => {
       const target = prev.find((r) => r.id === id);
       if (target) {
-        // Delete all segment files (or the single file for legacy recordings)
         const uris = target.segmentUris?.length ? target.segmentUris : [target.fileUri];
         uris.forEach((uri) => FileSystem.deleteAsync(uri, { idempotent: true }));
       }
-      const next = prev.filter((r) => r.id !== id);
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      next = prev.filter((r) => r.id !== id);
       return next;
     });
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }, []);
 
   const renameRecording = useCallback(async (id: string, newTitle: string) => {
+    let next: Recording[] = [];
     setRecordings((prev) => {
-      const next = prev.map((r) => (r.id === id ? { ...r, title: newTitle } : r));
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      next = prev.map((r) => (r.id === id ? { ...r, title: newTitle } : r));
       return next;
     });
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }, []);
 
   return (
-    <RecordingsContext.Provider value={{ recordings, newFileUri, addRecording, deleteRecording, renameRecording }}>
+    <RecordingsContext.Provider value={{
+      recordings,
+      materializeSegment,
+      addRecording,
+      saveDraftRecording,
+      clearDraftRecording,
+      deleteRecording,
+      renameRecording,
+    }}>
       {children}
     </RecordingsContext.Provider>
   );

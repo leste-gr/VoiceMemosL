@@ -17,7 +17,15 @@ type Props = NativeStackScreenProps<RootStackParamList, 'List'>;
 
 export default function RecordingListScreen({ navigation }: Props) {
   const isFocused = useIsFocused();
-  const { recordings, addRecording, deleteRecording, renameRecording } = useRecordingsStore();
+  const {
+    recordings,
+    materializeSegment,
+    addRecording,
+    saveDraftRecording,
+    clearDraftRecording,
+    deleteRecording,
+    renameRecording,
+  } = useRecordingsStore();
   const recorder = useAudioRecorder();
   const [renameTarget, setRenameTarget] = useState<Recording | null>(null);
   const [renameText, setRenameText] = useState('');
@@ -31,6 +39,12 @@ export default function RecordingListScreen({ navigation }: Props) {
 
   // Keeps segment URIs collected during a recording session
   const sessionSegmentsRef = useRef<string[]>([]);
+  const sessionIdRef = useRef('');
+  const sessionTitleRef = useRef('');
+  const sessionCreatedAtRef = useRef('');
+  const sessionDurationRef = useRef(0);
+  const nextSegmentIndexRef = useRef(0);
+  const pendingSegmentTasksRef = useRef(new Set<Promise<void>>());
 
   // ── Transcript + command detection ─────────────────────────────────────────
   type TranscriptCmd = import('../hooks/useRecordingTranscript').TranscriptCommand;
@@ -54,6 +68,23 @@ export default function RecordingListScreen({ navigation }: Props) {
   const { processSegment, waitForPending, reset: resetTranscript, enable: enableTranscript, getTranscript } =
     useRecordingTranscript(handleTranscriptCommand);
 
+  const buildDraftRecording = useCallback((duration: number, transcript?: string): Recording => ({
+    id: sessionIdRef.current,
+    title: sessionTitleRef.current,
+    fileUri: sessionSegmentsRef.current[0] ?? '',
+    segmentUris: sessionSegmentsRef.current.filter(Boolean),
+    createdAt: sessionCreatedAtRef.current,
+    duration,
+    transcript: transcript || undefined,
+  }), []);
+
+  const waitForPendingSegments = useCallback(async () => {
+    const pending = Array.from(pendingSegmentTasksRef.current);
+    if (pending.length) {
+      await Promise.allSettled(pending);
+    }
+  }, []);
+
   // ── Stop + save ────────────────────────────────────────────────────────────
   // Uses only stable refs for the guard — no dependency on React state closures.
   const stopAndSave = useCallback(async () => {
@@ -71,22 +102,14 @@ export default function RecordingListScreen({ navigation }: Props) {
     // and pendingRef, so getTranscript() would return '' and waitForPending() would
     // skip in-flight Groq calls that still need to finish before we save.
     try {
-      const { segmentUris, duration } = await recorder.stop();
+      const { duration } = await recorder.stop();
+      await waitForPendingSegments();
       // Wait for all in-flight Groq calls to settle (transcript still accumulates,
       // but commands are blocked by isActiveRecordingRef=false above).
       await waitForPending();
       const transcript = getTranscript();
-      console.log('[StopSave] segments:', segmentUris.length, 'transcript length:', transcript.length);
-      const now = new Date();
-      const recording: Recording = {
-        id: now.getTime().toString(),
-        title: formatTitle(now),
-        fileUri: segmentUris[0] ?? '',
-        segmentUris,
-        createdAt: now.toISOString(),
-        duration,
-        transcript: transcript || undefined,
-      };
+      console.log('[StopSave] segments:', sessionSegmentsRef.current.length, 'transcript length:', transcript.length);
+      const recording = buildDraftRecording(duration, transcript);
       await addRecording(recording);
     } catch (e) {
       console.warn('[RecordingList] stopAndSave error:', e);
@@ -94,10 +117,12 @@ export default function RecordingListScreen({ navigation }: Props) {
       resetTranscript(); // clear for next session (in finally so it always runs)
       setLiveTranscript('');
       sessionSegmentsRef.current = [];
+      sessionDurationRef.current = 0;
+      nextSegmentIndexRef.current = 0;
       isSavingRef.current = false;
       setSaving(false);
     }
-  }, [recorder.stop, waitForPending, getTranscript, addRecording, resetTranscript]);
+  }, [recorder.stop, waitForPendingSegments, waitForPending, getTranscript, buildDraftRecording, addRecording, resetTranscript]);
 
   // If the app goes inactive/background (e.g. lock screen), stop and save
   // immediately to avoid leaving a corrupted in-progress segment.
@@ -127,10 +152,28 @@ export default function RecordingListScreen({ navigation }: Props) {
 
   // ── Segment callback (called by recorder every ~5 s) ──────────────────────
   const handleSegment = useCallback(
-    (uri: string, _segDuration: number) => {
-      processSegment(uri).then((full) => setLiveTranscript(full));
+    (uri: string, segDuration: number) => {
+      const recordingId = sessionIdRef.current;
+      const segmentIndex = nextSegmentIndexRef.current;
+      nextSegmentIndexRef.current += 1;
+
+      const task = (async () => {
+        const durableUri = await materializeSegment(uri, recordingId, segmentIndex);
+        sessionSegmentsRef.current[segmentIndex] = durableUri;
+        sessionDurationRef.current += segDuration;
+
+        await saveDraftRecording(buildDraftRecording(sessionDurationRef.current, getTranscript()));
+
+        const full = await processSegment(durableUri);
+        setLiveTranscript(full);
+        await saveDraftRecording(buildDraftRecording(sessionDurationRef.current, full));
+      })().finally(() => {
+        pendingSegmentTasksRef.current.delete(task);
+      });
+
+      pendingSegmentTasksRef.current.add(task);
     },
-    [processSegment],
+    [materializeSegment, saveDraftRecording, buildDraftRecording, getTranscript, processSegment],
   );
 
   const handleExportLatestToNote = useCallback(async () => {
@@ -165,9 +208,16 @@ export default function RecordingListScreen({ navigation }: Props) {
   // ── Record button ──────────────────────────────────────────────────────────
   async function handleRecordPress() {
     if (recorder.state === 'idle' && !isSavingRef.current) {
+      const now = new Date();
       sessionSegmentsRef.current = [];
+      sessionIdRef.current = now.getTime().toString();
+      sessionTitleRef.current = formatTitle(now);
+      sessionCreatedAtRef.current = now.toISOString();
+      sessionDurationRef.current = 0;
+      nextSegmentIndexRef.current = 0;
       isActiveRecordingRef.current = true;
       enableTranscript();
+      await clearDraftRecording();
       await recorder.start(handleSegment);
     } else if (isActiveRecordingRef.current) {
       await stopAndSave();
